@@ -20,7 +20,7 @@
             {
                 "id": "co_buff",
                 "name": "Buff Combo",
-                "enabled": true,
+                "enabled": false,
                 "interval": 30,
                 "cast_delay": 1,
                 "sentinel_enabled": true,
@@ -39,7 +39,7 @@
             {
                 "id": "ma_buff",
                 "name": "Buff Magic",
-                "enabled": true,
+                "enabled": false,
                 "interval": 45,
                 "cast_delay": 2.0,
                 "sentinel_enabled": true,
@@ -58,7 +58,7 @@
             {
                 "id": "ca_buff",
                 "name": "Buff CA",
-                "enabled": true,
+                "enabled": false,
                 "interval": 5,
                 "cast_delay": 1,
                 "sentinel_enabled": true,
@@ -81,7 +81,7 @@
         "model_path": "yolov8n.pt",
         "scan_size": 600,
         "center_x": 958,
-        "center_y": 560,
+        "center_y": 510,
         "safe_box_w": 50,
         "safe_box_h": 120,
         "conf": 0.45,

@@ -1,3 +1,4 @@
+import sys
 import threading
 import time
 import keyboard
@@ -13,6 +14,7 @@ from DangerSystemClass import DangerSystem
 from HotKeySetClass import HotKeySystem
 from CombatRadarClass import CombatRadar
 from VoiceAssistant import VoiceAssistant
+from YOLOManagerClass import YOLOManager
 
 
 class SacredBot:
@@ -23,6 +25,7 @@ class SacredBot:
         self.module_addr = None
 
         # --- KHỞI TẠO BIẾN HỆ THỐNG (Tránh lỗi NoneType) ---
+        self.ai_sys = None       # YOLO AI Module
         self.radar = None
         self.potion_sys = None
         self.danger_sys = None
@@ -45,13 +48,44 @@ class SacredBot:
         self.last_speak_time = 0        
         self.is_pressing = False
 
-        # --- [CHANGELOG 2026-08-13] OLD: Khởi tạo mss ở Luồng chính (Main Thread) ---
-        # self.sct = mss.mss()              # [NEW 2026-08-13] Mss Screen Grabber cho Visual Sentinel
-        # --- [END OLD] ---
+        # Biến điều khiển YOLO Worker (Z bật / X tắt)
+        self.is_yolo_active = False     # Flag bật/tắt luồng YOLO targeting
+
         self.sct = None                     # Lazy init trong luồng worker để tránh lỗi thread-local srcdc Windows
         self.buff_queue = self._init_buff_system()
         self.last_buff_finish_time = 0    # Mốc thời gian hoàn tất buff gần nhất
         self.last_buff_cast_delay = 0     # Cast delay của buff vừa xong (giây)
+ 
+        self.last_event_msg = "Sẵn sàng"  # Thông điệp sự kiện gần nhất cho Single-line HUD
+        self.last_hud_print_time = 0.0    # Giới hạn tần suất in HUD tránh giật console
+
+
+    def print_hud(self, hp, threat):
+        """[NEW 2026-08-16] In trạng thái trực tiếp trên 1 dòng duy nhất (Single-line Live HUD).
+        Sử dụng sys.stdout.write('\r...') để đảm bảo ghi thẳng vào console buffer của Windows.
+        """
+        now = time.time()
+        if now - self.last_hud_print_time < 0.25:
+            return
+        self.last_hud_print_time = now
+
+        status_text = "ON" if self.is_running else "OFF"
+        # event_short = (self.last_event_msg[:20] + '..') if len(self.last_event_msg) > 22 else self.last_event_msg
+        # hud_line = f"\r[HUD] Bot: {status_text:<3} | HP: {hp:5.1f}% | Threat: {threat:2d} | {event_short:<22}"
+        
+        # 1. Triệt tiêu toàn bộ ký tự xuống dòng trong msg để không làm vỡ HUD
+        clean_msg = (
+            self.last_event_msg.replace("\r", "").replace("\n", " ").strip()
+        )
+        event_short = (
+            (clean_msg[:20] + "..") if len(clean_msg) > 22 else clean_msg
+        )
+
+        # 2. Thêm \033[K ở cuối để xóa sạch các ký tự dư thừa của dòng cũ
+        hud_line = f"\rHP: {hp:5.1f}% | Threat: {threat:2d} | {event_short:<22}\033[K"
+
+        sys.stdout.write(hud_line)
+        sys.stdout.flush()
 
     def load_config(self):
         import json
@@ -61,31 +95,6 @@ class SacredBot:
         except Exception as e:
             print(f"[ERROR] Không thể load config: {e}")
             return {}
-
-    # --- [CHANGELOG 2026-08-13] OLD: Init Buff System v1.0 (Timer Only) ---
-    # def _init_buff_system(self):
-    #     """[NEW 2026-08-11] Khởi tạo hệ thống Auto Buff từ config (3 loại: CA/MA/CO).
-    #     Mỗi buff có timer riêng, sequence riêng, và có thể bật/tắt độc lập.
-    #     """
-    #     buff_cfg = self.config.get('auto_buff_system', {})
-    #     buffs = []
-    #     for buff_data in buff_cfg.get('buffs', []):
-    #         buffs.append({
-    #             'id': buff_data.get('id', 'unknown'),
-    #             'name': buff_data.get('name', 'Buff'),
-    #             'enabled': buff_data.get('enabled', False),
-    #             'interval': buff_data.get('interval', 30),
-    #             'cast_delay': buff_data.get('cast_delay', 0.5),
-    #             'sequence': buff_data.get('sequence', []),
-    #             'last_cast_time': 0
-    #         })
-    #     enabled = buff_cfg.get('enabled', False)
-    #     print(f"[BUFF SYSTEM] {'BẬT' if enabled else 'TẮT'} — Loaded {len(buffs)} loại buff.")
-    #     return {
-    #         'enabled': enabled,
-    #         'buffs': buffs
-    #     }
-    # --- [END OLD] ---
 
     def _init_buff_system(self):
         """[NEW 2026-08-13] Khởi tạo hệ thống Auto Buff v2.0 từ config (Visual Sentinel + Priority Scheduler).
@@ -107,7 +116,6 @@ class SacredBot:
                 'min_brightness': buff_data.get('min_brightness', 14),
                 'max_brightness': buff_data.get('max_brightness', 177),
                 'retry_timeout': buff_data.get('retry_timeout', 3.0),
-                'retry_backoff': buff_data.get('retry_backoff', 2.0),
                 'sequence': buff_data.get('sequence', []),
                 'last_cast_time': 0,
                 'retry_start_time': 0
@@ -165,104 +173,6 @@ class SacredBot:
             print(f"[BUFF SENTINEL ERROR] Lỗi soi màu '{buff.get('name')}': {e}")
             return True
 
-    # --- [CHANGELOG 2026-08-15] OLD: Vòng lặp retry click_right nhiều lần gây nghẽn luồng ---
-    # def execute_buff_with_verification(self, buff, max_retries=2):
-    #     sequence = buff.get('sequence', [])
-    #     if not sequence:
-    #         return False
-    #     sentinel_enabled = buff.get('sentinel_enabled', True)
-    #     cast_confirmed = False
-    #     for step in sequence:
-    #         action = step.get('action', 'press')
-    #         key    = step.get('key', '')
-    #         wait   = step.get('wait', 0.1)
-    #         if action == 'click_right' and sentinel_enabled:
-    #             for attempt in range(max_retries + 1):
-    #                 pydirectinput.mouseUp(button='right')
-    #                 pydirectinput.mouseDown(button='right')
-    #                 time.sleep(0.08)
-    #                 pydirectinput.mouseUp(button='right')
-    #                 time.sleep(0.12)
-    #                 if not self.is_buff_ready(buff):
-    #                     cast_confirmed = True
-    #                     break
-    #             remaining_wait = max(0.0, wait - 0.2)
-    #             if remaining_wait > 0:
-    #                 time.sleep(remaining_wait)
-    #         elif action == 'press':
-    #             pydirectinput.keyUp(key)
-    #             pydirectinput.keyDown(key)
-    #             time.sleep(0.03)
-    #             pydirectinput.keyUp(key)
-    #             time.sleep(wait)
-    #     return cast_confirmed
-    # --- [END OLD] ---
-
-    def execute_buff_with_verification(self, buff):
-        """[NEW 2026-08-15] Thực thi buff Đơn Lượt (Single-Attempt) + Xác nhận màu Sentinel.
-        - Thực thi chọn phím skill.
-        - Click chuột phải 1 lần duy nhất -> Chờ 120ms -> Soi màu Sentinel xem đã vào Cooldown (Xám Đen) chưa.
-        - Tiếp tục thực thi toàn bộ các bước còn lại (như trả về phím skill chính) để không kẹt phím.
-        - Thoát ngay lập tức (Zero-blocking) và trả về kết quả True (thành công) / False (miss).
-        """
-        sequence = buff.get('sequence', [])
-        if not sequence:
-            return False
-
-        sentinel_enabled = buff.get('sentinel_enabled', True)
-        cast_confirmed = False
-
-        for step in sequence:
-            action = step.get('action', 'press')
-            key    = step.get('key', '')
-            wait   = step.get('wait', 0.1)
-
-            if action == 'click_right' and sentinel_enabled:
-                # 1. Click chuột phải 1 lần duy nhất
-                pydirectinput.mouseUp(button='right')
-                pydirectinput.mouseDown(button='right')
-                time.sleep(0.08)
-                pydirectinput.mouseUp(button='right')
-
-                # 2. Độ trễ ngắn để game cập nhật hiệu ứng đổi màu icon sang xám đen (CD)
-                time.sleep(0.12)
-
-                # 3. Soi màu: is_buff_ready == False có nghĩa là icon đã xám đen -> Đã kích hoạt thành công!
-                if not self.is_buff_ready(buff):
-                    cast_confirmed = True
-                else:
-                    print(f"[BUFF VERIFY] ⚠️ Miss click chuột phải cho '{buff['name']}'.")
-
-                # Chờ phần thời gian còn lại của step wait nếu còn
-                remaining_wait = max(0.0, wait - 0.2)
-                if remaining_wait > 0:
-                    time.sleep(remaining_wait)
-            elif action == 'press':
-                pydirectinput.keyUp(key)
-                pydirectinput.keyDown(key)
-                time.sleep(0.03)
-                pydirectinput.keyUp(key)
-                time.sleep(wait)
-            elif action == 'click_right':
-                # Trường hợp sentinel_enabled bị tắt -> click thông thường
-                pydirectinput.mouseUp(button='right')
-                pydirectinput.mouseDown(button='right')
-                time.sleep(0.08)
-                pydirectinput.mouseUp(button='right')
-                cast_confirmed = True
-                time.sleep(wait)
-            elif action == 'click_left':
-                pydirectinput.mouseUp(button='left')
-                pydirectinput.mouseDown(button='left')
-                time.sleep(0.08)
-                pydirectinput.mouseUp(button='left')
-                time.sleep(wait)
-
-        if not sentinel_enabled:
-            cast_confirmed = True
-
-        return cast_confirmed
-
     def connect_game(self):
         """Kết nối game và khởi tạo tất cả các module."""
         try:
@@ -277,6 +187,10 @@ class SacredBot:
             # 2. Khởi tạo Logic Modules
             self.hotkey_sys = HotKeySystem(self.config.get('hotkey_system'))
             self.radar = CombatRadar(self.config)
+            
+            # 3. Khởi tạo AI Module (YOLO)
+            if self.config.get('ai_system'):
+                self.ai_sys = YOLOManager(self.config)
 
             print(f"\n[SUCCESS] Đã kết nối Sacred.exe (Base: {hex(self.module_addr)})")
             self.voice.speak('Hệ thống đã sẵn sàng. Chiến thôi đại ca!')
@@ -314,7 +228,7 @@ class SacredBot:
         while not self.exit_event.is_set():
             # KIỂM TRA AN TOÀN TRƯỚC KHI CHẠY (Tránh lỗi NoneType)
             if not (self.game_connected and self.is_running and self.radar):
-                # Nếu Bot đang bật mà chưa nạp xong AI/Radar thì tạm dừng
+                # Nếu Bot đang bật mà chưa nạp xong Radar thì tạm dừng
                 time.sleep(0.1)
                 continue
 
@@ -327,28 +241,11 @@ class SacredBot:
 
             if threat > 0:
                 self.safe_start_time = 0.0  # Reset đồng hồ Safe khi có quái
-                
+
                 # 1. THÔNG BÁO GIỌNG NÓI (Chỉ nói 1 lần duy nhất khi vừa chớm gặp bãi quái)
                 if not self.is_in_combat:
                     self.is_in_combat = True
                     self.voice.speak("Có quái.")
-
-
-                # --- [CHANGELOG 2026-08-13] OLD: Auto Buff v1.0 (Timer Only) ---
-                # if self.buff_queue['enabled']:
-                #     # Đảm bảo cast_delay sau buff gần nhất đã trôi qua trước khi cast buff tiếp
-                #     if current_time - self.last_buff_finish_time >= self.last_buff_cast_delay:
-                #         for buff in self.buff_queue['buffs']:
-                #             if not buff['enabled']:
-                #                 continue
-                #             if current_time - buff['last_cast_time'] >= buff['interval']:
-                #                 self.voice.speak(buff['name'])
-                #                 self.hotkey_sys.execute_sequence(buff['sequence'])
-                #                 buff['last_cast_time'] = current_time
-                #                 self.last_buff_finish_time = time.time()
-                #                 self.last_buff_cast_delay = buff['cast_delay']
-                #                 break  # Chỉ chạy 1 buff mỗi vòng lặp — tránh xung đột phím
-                # --- [END OLD] ---
 
                 # [NEW 2026-08-13] AUTO BUFF SYSTEM v2.0 (Visual Sentinel + Priority Scheduler)
                 if self.buff_queue['enabled']:
@@ -363,64 +260,18 @@ class SacredBot:
                         if due_buffs:
                             cast_executed = False
 
-                            # --- [CHANGELOG 2026-08-13] OLD: Scheduler không in log ---
-                            # # 2. Thử trinh sát màu Visual Sentinel từng buff đến hạn (Chuyển mạch ưu tiên)
-                            # for target_buff in due_buffs:
-                            #     if self.is_buff_ready(target_buff):
-                            #         self.voice.speak(target_buff['name'])
-                            #         self.hotkey_sys.execute_sequence(target_buff['sequence'])
-                            #         target_buff['last_cast_time'] = current_time
-                            #         target_buff['retry_start_time'] = 0  # Reset mốc retry khi đã buff thành công
-                            #         self.last_buff_finish_time = time.time()
-                            #         self.last_buff_cast_delay = target_buff['cast_delay']
-                            #         cast_executed = True
-                            #         break  # Chỉ cast 1 buff thành công duy nhất trong mỗi lượt
-                            # --- [END OLD] ---
-
-                            # [DEBUG LOG - COMMENTED OUT] Log scheduler trinh sát màu
-                            # buff_names = [b['name'] for b in due_buffs]
-                            # print(f"\n[BUFF SCHEDULER] Có {len(due_buffs)} buff đến hạn: {buff_names}. Đang trinh sát màu...")
-
-                            # --- [CHANGELOG 2026-08-15] OLD: Blind Execution qua execute_sequence (Không check miss chuột phải) ---
-                            # for target_buff in due_buffs:
-                            #     if self.is_buff_ready(target_buff):
-                            #         print(f"[BUFF EXECUTE] ✅ Kích hoạt buff: {target_buff['name']}")
-                            #         self.voice.speak(target_buff['name'])
-                            #         self.hotkey_sys.execute_sequence(target_buff['sequence'])
-                            #         target_buff['last_cast_time'] = current_time
-                            #         target_buff['retry_start_time'] = 0  # Reset mốc retry khi đã buff thành công
-                            #         self.last_buff_finish_time = time.time()
-                            #         self.last_buff_cast_delay = target_buff['cast_delay']
-                            #         cast_executed = True
-                            #         break  # Chỉ cast 1 buff thành công duy nhất trong mỗi lượt
-                            # --- [END OLD] ---
-
-                            # [NEW 2026-08-15] 2. Thử trinh sát màu Visual Sentinel & Thực thi Closed-Loop (Phương án A: Đơn lượt + Backoff Delay)
+                            # 2. Thử trinh sát màu Visual Sentinel từng buff đến hạn (Chuyển mạch ưu tiên)
                             for target_buff in due_buffs:
                                 if self.is_buff_ready(target_buff):
-                                    print(f"[BUFF EXECUTE] ✅ Bắt đầu thi triển buff: {target_buff['name']}")
+                                    self.last_event_msg = f"Buff: {target_buff['name']}"
                                     self.voice.speak(target_buff['name'])
-                                    
-                                    # Thực thi chuỗi buff 1 lần duy nhất kèm xác nhận đổi màu sau click_right
-                                    is_success = self.execute_buff_with_verification(target_buff)
-                                    
-                                    if is_success:
-                                        target_buff['last_cast_time'] = current_time
-                                        target_buff['retry_start_time'] = 0  # Reset mốc retry khi đã buff thành công
-                                        self.last_buff_finish_time = time.time()
-                                        self.last_buff_cast_delay = target_buff['cast_delay']
-                                        cast_executed = True
-                                        print(f"[BUFF EXECUTE] 🎯 Buff '{target_buff['name']}' thành công (Đã xác nhận chuyển màu CD).")
-                                        break  # Chỉ hoàn tất 1 buff trong mỗi lượt
-                                    else:
-                                        # XỬ LÝ KHI MISS CHUỘT PHẢI (Phương án A): Hoãn tạm thời 2s để tránh nghẽn luồng / spam 20ms
-                                        backoff = target_buff.get('retry_backoff', 2.0)
-                                        target_buff['last_cast_time'] = current_time - target_buff['interval'] + backoff
-                                        self.last_buff_finish_time = time.time()
-                                        self.last_buff_cast_delay = 0.2
-                                        cast_executed = True
-                                        print(f"[BUFF EXECUTE] ⚠️ Buff '{target_buff['name']}' miss chuột phải. Tạm hoãn {backoff}s trước khi thử lại để tránh nghẽn luồng.")
-                                        break
+                                    self.hotkey_sys.execute_sequence(target_buff['sequence'])
+                                    target_buff['last_cast_time'] = current_time
+                                    target_buff['retry_start_time'] = 0  # Reset mốc retry khi đã buff thành công
+                                    self.last_buff_finish_time = time.time()
+                                    self.last_buff_cast_delay = target_buff['cast_delay']
+                                    cast_executed = True
+                                    break  # Chỉ cast 1 buff thành công duy nhất trong mỗi lượt
 
                             # 3. NẾU TẤT CẢ BUFF ĐẾN HẠN ĐỀU CHƯA READY (Đang dính CD / Tối màu)
                             if not cast_executed:
@@ -440,6 +291,7 @@ class SacredBot:
                         self.voice.speak('Clear.')
                         self.is_in_combat = False
                         self.safe_start_time = 0.0
+                        self.last_event_msg = "Clear"
                         # LƯU Ý: Tuyệt đối KHÔNG reset self.last_buff_time ở đây
                         # để thời gian hồi chiêu buff tiếp tục được đếm chuẩn xác xuyên suốt các bãi quái.
                 
@@ -449,19 +301,93 @@ class SacredBot:
             if hp < threshold and (current_time - last_potion_time > 0.8):
                 pydirectinput.press(self.config['potion_system']['key'])
                 last_potion_time = current_time
+                self.last_event_msg = "Bom mau"
                 if current_time - self.last_speak_time > 3.0:
                     self.voice.speak('Bơm máu!')
                     self.last_speak_time = current_time
 
-            # Chạy Hotkey
-            self.hotkey_sys.run_check()
+            # Chạy Hotkey với callback HUD (văn bản thuần không emoji)
+            self.hotkey_sys.run_check(on_trigger=lambda name: setattr(self, 'last_event_msg', f"Combo: {name}"))
+
+            # In HUD trực tiếp trên 1 dòng
+            self.print_hud(hp, threat)
 
             time.sleep(0.02)
+
+    def yolo_worker(self):
+        """Luồng YOLO targeting độc lập: Z bật / X tắt.
+        Toàn quyền kiểm soát mouseDown/Up — không phụ thuộc action_worker.
+        """
+        while not self.exit_event.is_set():
+
+            # --- TOGGLE Z / X ---
+            if keyboard.is_pressed('z') and not self.is_yolo_active:
+                self.is_yolo_active = True
+                winsound.Beep(1000, 150)
+                print("\n[YOLO] BẬT targeting")
+                time.sleep(0.3)  # debounce
+
+            if keyboard.is_pressed('x') and self.is_yolo_active:
+                self.is_yolo_active = False
+                if self.is_pressing:
+                    pydirectinput.mouseUp(button='left')
+                    self.is_pressing = False
+                winsound.Beep(500, 150)
+                print("\n[YOLO] TẮT targeting")
+                time.sleep(0.3)  # debounce
+
+            # --- GUARD: Dừng nếu chưa sẵn sàng hoặc bị tạm dừng ---
+            if not (self.game_connected and self.is_running
+                    and self.is_yolo_active
+                    and self.ai_sys and self.radar):
+                if self.is_pressing:        # Nhả chuột nếu bị gián đoạn giữa chừng
+                    pydirectinput.mouseUp(button='left')
+                    self.is_pressing = False
+                time.sleep(0.05)
+                continue
+
+            # --- YOLO DETECT + RADAR CONFIRM ---
+            try:
+                # --- OLD CODE (REPLACED) ---
+                # target_pos = self.ai_sys.get_best_target()
+                # ---------------------------
+                target_pos = self.ai_sys.get_best_target(debug=True)
+
+                if target_pos:
+                    tx, ty = target_pos
+                    pydirectinput.moveTo(tx, ty, _pause=False)
+
+                    if self.radar.is_target_detected():     # Thanh HP xác nhận → BEM
+                        if not self.is_pressing:
+                            pydirectinput.mouseDown(button='left')
+                            self.is_pressing = True
+                    else:                                   # Radar fail → nhả tay
+                        if self.is_pressing:
+                            pydirectinput.mouseUp(button='left')
+                            self.is_pressing = False
+                else:                                       # Mất target → nhả tay
+                    if self.is_pressing:
+                        pydirectinput.mouseUp(button='left')
+                        self.is_pressing = False
+
+            except Exception as e:
+                print(f"\n[YOLO ERROR] {e}")
+                if self.is_pressing:
+                    pydirectinput.mouseUp(button='left')
+                    self.is_pressing = False
+
+            time.sleep(0.02)
+
+        # --- EXIT CLEANUP: Đảm bảo nhả chuột khi app thoát ---
+        if self.is_pressing:
+            pydirectinput.mouseUp(button='left')
+            self.is_pressing = False
 
     def run(self):
         threads = [
             threading.Thread(target=self.sensor_worker, daemon=True),
-            threading.Thread(target=self.action_worker, daemon=True)
+            threading.Thread(target=self.action_worker, daemon=True),
+            threading.Thread(target=self.yolo_worker,   daemon=True),
         ]
         for t in threads: t.start()
 
@@ -485,11 +411,7 @@ class SacredBot:
                         buff['retry_start_time'] = 0
                     self.last_buff_finish_time = 0
                     self.last_buff_cast_delay = 0
-                else:
-                    # Đảm bảo nhả chuột khi tắt bot
-                    if self.is_pressing:
-                        pydirectinput.mouseUp(button='left')
-                        self.is_pressing = False
+                # Khi is_running = False, yolo_worker guard tự nhả chuột — không cần xử lý ở đây
                 
                 status_msg = 'Bot đã bật.' if self.is_running else 'Bot nghỉ ngơi.'
                 self.voice.speak(status_msg)
