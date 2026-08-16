@@ -1,29 +1,18 @@
 {
     "global": {
-        "selected_class": "WoodElf", 
-        "process_name": "sacred.exe",
-        "toggle_key": "d",
-        "cast_delay": 0.5
+        "toggle_key": "d"
     },
 
     "potion_system": {
-    "enabled": true,
-    "threshold_percent": 30,
-    "key": "space"
-    },
-    "danger_system": {
         "enabled": true,
-        "base_pointer_offset": 20881316,
-        "offsets": [3264],
-        "cooldown_after_fight": 5.0
+        "threshold_percent": 30,
+        "key": "space"
     },
     "combat_system": {
         "radar_center_x": 947,
         "radar_center_y": 790,
         "scan_width": 20,
-        "scan_height": 3,
-        "melee_hold_mode": true,
-        "buff_interval": 30
+        "scan_height": 3
     },
     "auto_buff_system": {
         "enabled": true,
@@ -43,7 +32,7 @@
                 "retry_timeout": 3.0,
                 "sequence": [
                     {"action": "press", "key": "0", "wait": 0.30},
-                    {"action": "click_right", "key": "", "hold": 0.22, "wait": 0.5},
+                    {"action": "click_right", "key": "", "hold": 0, "wait": 0.5},
                     {"action": "press", "key": "6", "wait": 0.30}
                 ]
             },
@@ -51,8 +40,8 @@
                 "id": "ma_buff",
                 "name": "Buff Magic",
                 "enabled": true,
-                "interval": 55,
-                "cast_delay": 4.0,
+                "interval": 45,
+                "cast_delay": 2.0,
                 "sentinel_enabled": true,
                 "sentinel_x": 1251,
                 "sentinel_y": 856,
@@ -62,7 +51,7 @@
                 "retry_timeout": 3.0,
                 "sequence": [
                     {"action": "press", "key": "9", "wait": 0.20},
-                    {"action": "click_right", "key": "", "hold": 0.22, "wait": 0.50},
+                    {"action": "click_right", "key": "", "hold": 0, "wait": 0.50},
                     {"action": "press", "key": "6", "wait": 0.20}
                 ]
             },
@@ -81,7 +70,7 @@
                 "retry_timeout": 3.0,
                 "sequence": [
                     {"action": "press", "key": "8", "wait": 0.30},
-                    {"action": "click_right", "key": "", "hold": 0.20, "wait": 0.50},
+                    {"action": "click_right", "key": "", "hold": 0, "wait": 0.50},
                     {"action": "press", "key": "6", "wait": 0.30}
                 ]
             }
@@ -154,40 +143,5 @@
                 ]
             }
         ]
-    },
-    "classes": {
-        "WoodElf": {
-            "skills": [
-                {
-                    "name": "Đấm Liên Hoàn (Spam)",
-                    "type": "active", 
-                    "key": "1",
-                    "x": 1134, "y": 877,
-                    "color_rgb": [221, 255, 102],
-                    "tolerance": 30
-                },
-                {
-                    "name": "Hộ Thể (Buff)",
-                    "type": "buff",
-                    "key": "6",
-                    "x": 1170, "y": 875,
-                    "color_rgb": [200, 200, 50],
-                    "duration": 25,
-                    "tolerance": 60
-                }
-            ]
-        },
-        "Seraphim": {
-            "skills": [
-                {
-                    "name": "Sét Xoay (Active)",
-                    "type": "active",
-                    "key": "2",
-                    "x": 1134, "y": 877,
-                    "color_rgb": [100, 100, 255],
-                    "tolerance": 30
-                }
-            ]
-        }
     }
 }

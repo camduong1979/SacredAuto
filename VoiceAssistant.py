@@ -36,12 +36,16 @@ class VoiceAssistant:
         # BƯỚC 1: KIỂM TRA CACHE
         # Nếu chưa có file thì mới tải từ Google (chỉ tốn mạng lần đầu)
         if not os.path.exists(filename):
-            print(f"[GOOGLE TTS] Đang tải giọng nói: '{text}'...")
+            # --- OLD CODE (REPLACED) ---
+            # print(f"[GOOGLE TTS] Đang tải giọng nói: '{text}'...")
+            # ---------------------------
             try:
                 tts = gTTS(text=text, lang='vi')
                 tts.save(filename)
             except Exception as e:
-                print(f"[ERROR] Mất mạng hoặc lỗi API: {e}")
+                # --- OLD CODE (REPLACED) ---
+                # print(f"[ERROR] Mất mạng hoặc lỗi API: {e}")
+                # ---------------------------
                 return
 
         # BƯỚC 2: PHÁT NHẠC BẰNG PYGAME

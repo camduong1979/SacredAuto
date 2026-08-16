@@ -1,3 +1,4 @@
+import sys
 import threading
 import time
 import keyboard
@@ -45,13 +46,41 @@ class SacredBot:
         self.last_speak_time = 0        
         self.is_pressing = False
 
-        # --- [CHANGELOG 2026-08-13] OLD: Khởi tạo mss ở Luồng chính (Main Thread) ---
-        # self.sct = mss.mss()              # [NEW 2026-08-13] Mss Screen Grabber cho Visual Sentinel
-        # --- [END OLD] ---
         self.sct = None                     # Lazy init trong luồng worker để tránh lỗi thread-local srcdc Windows
         self.buff_queue = self._init_buff_system()
         self.last_buff_finish_time = 0    # Mốc thời gian hoàn tất buff gần nhất
         self.last_buff_cast_delay = 0     # Cast delay của buff vừa xong (giây)
+ 
+        self.last_event_msg = "Sẵn sàng"  # Thông điệp sự kiện gần nhất cho Single-line HUD
+        self.last_hud_print_time = 0.0    # Giới hạn tần suất in HUD tránh giật console
+
+
+    def print_hud(self, hp, threat):
+        """[NEW 2026-08-16] In trạng thái trực tiếp trên 1 dòng duy nhất (Single-line Live HUD).
+        Sử dụng sys.stdout.write('\r...') để đảm bảo ghi thẳng vào console buffer của Windows.
+        """
+        now = time.time()
+        if now - self.last_hud_print_time < 0.25:
+            return
+        self.last_hud_print_time = now
+
+        status_text = "ON" if self.is_running else "OFF"
+        # event_short = (self.last_event_msg[:20] + '..') if len(self.last_event_msg) > 22 else self.last_event_msg
+        # hud_line = f"\r[HUD] Bot: {status_text:<3} | HP: {hp:5.1f}% | Threat: {threat:2d} | {event_short:<22}"
+        
+        # 1. Triệt tiêu toàn bộ ký tự xuống dòng trong msg để không làm vỡ HUD
+        clean_msg = (
+            self.last_event_msg.replace("\r", "").replace("\n", " ").strip()
+        )
+        event_short = (
+            (clean_msg[:20] + "..") if len(clean_msg) > 22 else clean_msg
+        )
+
+        # 2. Thêm \033[K ở cuối để xóa sạch các ký tự dư thừa của dòng cũ
+        hud_line = f"\rHP: {hp:5.1f}% | Threat: {threat:2d} | {event_short:<22}\033[K"
+
+        sys.stdout.write(hud_line)
+        sys.stdout.flush()
 
     def load_config(self):
         import json
@@ -61,31 +90,6 @@ class SacredBot:
         except Exception as e:
             print(f"[ERROR] Không thể load config: {e}")
             return {}
-
-    # --- [CHANGELOG 2026-08-13] OLD: Init Buff System v1.0 (Timer Only) ---
-    # def _init_buff_system(self):
-    #     """[NEW 2026-08-11] Khởi tạo hệ thống Auto Buff từ config (3 loại: CA/MA/CO).
-    #     Mỗi buff có timer riêng, sequence riêng, và có thể bật/tắt độc lập.
-    #     """
-    #     buff_cfg = self.config.get('auto_buff_system', {})
-    #     buffs = []
-    #     for buff_data in buff_cfg.get('buffs', []):
-    #         buffs.append({
-    #             'id': buff_data.get('id', 'unknown'),
-    #             'name': buff_data.get('name', 'Buff'),
-    #             'enabled': buff_data.get('enabled', False),
-    #             'interval': buff_data.get('interval', 30),
-    #             'cast_delay': buff_data.get('cast_delay', 0.5),
-    #             'sequence': buff_data.get('sequence', []),
-    #             'last_cast_time': 0
-    #         })
-    #     enabled = buff_cfg.get('enabled', False)
-    #     print(f"[BUFF SYSTEM] {'BẬT' if enabled else 'TẮT'} — Loaded {len(buffs)} loại buff.")
-    #     return {
-    #         'enabled': enabled,
-    #         'buffs': buffs
-    #     }
-    # --- [END OLD] ---
 
     def _init_buff_system(self):
         """[NEW 2026-08-13] Khởi tạo hệ thống Auto Buff v2.0 từ config (Visual Sentinel + Priority Scheduler).
@@ -235,22 +239,6 @@ class SacredBot:
                     self.voice.speak("Có quái.")
 
 
-                # --- [CHANGELOG 2026-08-13] OLD: Auto Buff v1.0 (Timer Only) ---
-                # if self.buff_queue['enabled']:
-                #     # Đảm bảo cast_delay sau buff gần nhất đã trôi qua trước khi cast buff tiếp
-                #     if current_time - self.last_buff_finish_time >= self.last_buff_cast_delay:
-                #         for buff in self.buff_queue['buffs']:
-                #             if not buff['enabled']:
-                #                 continue
-                #             if current_time - buff['last_cast_time'] >= buff['interval']:
-                #                 self.voice.speak(buff['name'])
-                #                 self.hotkey_sys.execute_sequence(buff['sequence'])
-                #                 buff['last_cast_time'] = current_time
-                #                 self.last_buff_finish_time = time.time()
-                #                 self.last_buff_cast_delay = buff['cast_delay']
-                #                 break  # Chỉ chạy 1 buff mỗi vòng lặp — tránh xung đột phím
-                # --- [END OLD] ---
-
                 # [NEW 2026-08-13] AUTO BUFF SYSTEM v2.0 (Visual Sentinel + Priority Scheduler)
                 if self.buff_queue['enabled']:
                     # Đảm bảo cast_delay sau buff gần nhất đã trôi qua trước khi cast buff tiếp
@@ -264,28 +252,10 @@ class SacredBot:
                         if due_buffs:
                             cast_executed = False
 
-                            # --- [CHANGELOG 2026-08-13] OLD: Scheduler không in log ---
-                            # # 2. Thử trinh sát màu Visual Sentinel từng buff đến hạn (Chuyển mạch ưu tiên)
-                            # for target_buff in due_buffs:
-                            #     if self.is_buff_ready(target_buff):
-                            #         self.voice.speak(target_buff['name'])
-                            #         self.hotkey_sys.execute_sequence(target_buff['sequence'])
-                            #         target_buff['last_cast_time'] = current_time
-                            #         target_buff['retry_start_time'] = 0  # Reset mốc retry khi đã buff thành công
-                            #         self.last_buff_finish_time = time.time()
-                            #         self.last_buff_cast_delay = target_buff['cast_delay']
-                            #         cast_executed = True
-                            #         break  # Chỉ cast 1 buff thành công duy nhất trong mỗi lượt
-                            # --- [END OLD] ---
-
-                            # [DEBUG LOG - COMMENTED OUT] Log scheduler trinh sát màu
-                            # buff_names = [b['name'] for b in due_buffs]
-                            # print(f"\n[BUFF SCHEDULER] Có {len(due_buffs)} buff đến hạn: {buff_names}. Đang trinh sát màu...")
-
                             # 2. Thử trinh sát màu Visual Sentinel từng buff đến hạn (Chuyển mạch ưu tiên)
                             for target_buff in due_buffs:
                                 if self.is_buff_ready(target_buff):
-                                    print(f"[BUFF EXECUTE] ✅ Kích hoạt buff: {target_buff['name']}")
+                                    self.last_event_msg = f"Buff: {target_buff['name']}"
                                     self.voice.speak(target_buff['name'])
                                     self.hotkey_sys.execute_sequence(target_buff['sequence'])
                                     target_buff['last_cast_time'] = current_time
@@ -313,6 +283,7 @@ class SacredBot:
                         self.voice.speak('Clear.')
                         self.is_in_combat = False
                         self.safe_start_time = 0.0
+                        self.last_event_msg = "Clear"
                         # LƯU Ý: Tuyệt đối KHÔNG reset self.last_buff_time ở đây
                         # để thời gian hồi chiêu buff tiếp tục được đếm chuẩn xác xuyên suốt các bãi quái.
                 
@@ -322,12 +293,16 @@ class SacredBot:
             if hp < threshold and (current_time - last_potion_time > 0.8):
                 pydirectinput.press(self.config['potion_system']['key'])
                 last_potion_time = current_time
+                self.last_event_msg = "Bom mau"
                 if current_time - self.last_speak_time > 3.0:
                     self.voice.speak('Bơm máu!')
                     self.last_speak_time = current_time
 
-            # Chạy Hotkey
-            self.hotkey_sys.run_check()
+            # Chạy Hotkey với callback HUD (văn bản thuần không emoji)
+            self.hotkey_sys.run_check(on_trigger=lambda name: setattr(self, 'last_event_msg', f"Combo: {name}"))
+
+            # In HUD trực tiếp trên 1 dòng
+            self.print_hud(hp, threat)
 
             time.sleep(0.02)
 
