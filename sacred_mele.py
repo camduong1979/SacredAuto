@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 import threading
 import time
 import keyboard
@@ -48,8 +48,9 @@ class SacredBot:
         self.last_speak_time = 0        
         self.is_pressing = False
 
-        # Biến điều khiển YOLO Worker (Z bật / X tắt)
-        self.is_yolo_active = False     # Flag bật/tắt luồng YOLO targeting
+        # Biến điều khiển Color Worker (Z bật thủ công / X tắt thủ công / N auto-sync)
+        self.is_color_active = False    # Flag bật/tắt luồng Color targeting
+        self.target_detected = False    # Trạng thái phát hiện mục tiêu để hiển thị lên Live HUD
 
         self.sct = None                     # Lazy init trong luồng worker để tránh lỗi thread-local srcdc Windows
         self.buff_queue = self._init_buff_system()
@@ -82,7 +83,12 @@ class SacredBot:
         )
 
         # 2. Thêm \033[K ở cuối để xóa sạch các ký tự dư thừa của dòng cũ
-        hud_line = f"\rHP: {hp:5.1f}% | Threat: {threat:2d} | {event_short:<22}\033[K"
+        # --- OLD CODE (REPLACED) ---
+        # clr_text = "ON " if self.is_color_active else "OFF"
+        # hud_line = f"\rHP: {hp:5.1f}% | Threat: {threat:2d} | CLR: {clr_text} | {event_short:<22}\033[K"
+        # ---------------------------
+        target_str = "Aim" if self.target_detected else "None"
+        hud_line = f"\rHP: {hp:5.1f}% | Threat: {threat:2d} | Target: {target_str:<15} | {event_short:<22}\033[K"
 
         sys.stdout.write(hud_line)
         sys.stdout.flush()
@@ -323,87 +329,73 @@ class SacredBot:
     def color_worker(self):
         """Luồng nhận diện quái bằng mã màu HP — không dùng YOLO.
         Cấu trúc giống yolo_worker (Z bật / X tắt).
-        Logic scan: giống debug_v3.py (RED>=2 hoặc WHITE/YELLOW → mouseDown).
         Toàn quyền kiểm soát mouseDown/Up — không phụ thuộc action_worker.
+        [REFACTORED] Scan loop + check_logic đã chuyển vào CombatRadarClass.is_target_detected().
         """
-        # --- Cấu hình dải quét (giống debug_v3.py) ---
-        scan_cfg = self.config.get('color_radar', {})
-        CHECK_X  = scan_cfg.get('check_x', 947)
-        CHECK_Y  = scan_cfg.get('check_y', 790)
-        SCAN_W   = scan_cfg.get('scan_w',  20)
-        SCAN_H   = scan_cfg.get('scan_h',  3)
-
-        def check_logic(r, g, b):
-            """Phân loại pixel theo mã màu Sacred (từ debug_v3.py)."""
-            if r > 250 and g > 250 and b > 250: return "WHITE"
-            if r > 240 and g > 240 and (100 < b < 150): return "YELLOW"
-            if (110 <= r <= 185) and (g < 95) and (b < 95) and (abs(g - b) < 15): return "RED"
-            return None
+        # --- OLD CODE (REPLACED: scan loop + check_logic nội bộ trùng với CombatRadarClass) ---
+        # scan_cfg = self.config.get('color_radar', {})
+        # CHECK_X  = scan_cfg.get('check_x', 947)
+        # CHECK_Y  = scan_cfg.get('check_y', 790)
+        # SCAN_W   = scan_cfg.get('scan_w',  20)
+        # SCAN_H   = scan_cfg.get('scan_h',  3)
+        #
+        # def check_logic(r, g, b):
+        #     if r > 250 and g > 250 and b > 250: return "WHITE"
+        #     if r > 240 and g > 240 and (100 < b < 150): return "YELLOW"
+        #     if (110 <= r <= 185) and (g < 95) and (b < 95) and (abs(g - b) < 15): return "RED"
+        #     return None
+        # ---------------------------
 
         while not self.exit_event.is_set():
 
-            # --- TOGGLE Z / X ---
-            if keyboard.is_pressed('z') and not self.is_yolo_active:
-                self.is_yolo_active = True
+            # --- TOGGLE Z / X (Override thủ công) ---
+            if keyboard.is_pressed('z') and not self.is_color_active:
+                self.is_color_active = True
                 winsound.Beep(1000, 150)
-                print("\n[COLOR] BẬT targeting")
+                print("\n[COLOR] BẬT targeting (thủ công)")
                 time.sleep(0.3)  # debounce
 
-            if keyboard.is_pressed('x') and self.is_yolo_active:
-                self.is_yolo_active = False
+            if keyboard.is_pressed('x') and self.is_color_active:
+                self.is_color_active = False
                 if self.is_pressing:
                     pydirectinput.mouseUp(button='left')
                     self.is_pressing = False
                 winsound.Beep(500, 150)
-                print("\n[COLOR] TẮT targeting")
+                print("\n[COLOR] TẮT targeting (thủ công)")
                 time.sleep(0.3)  # debounce
 
             # --- GUARD: Dừng nếu chưa sẵn sàng hoặc bị tạm dừng ---
-            if not (self.game_connected and self.is_running and self.is_yolo_active):
+            if not (self.game_connected and self.is_running and self.is_color_active):
+                self.target_detected = False
                 if self.is_pressing:
                     pydirectinput.mouseUp(button='left')
                     self.is_pressing = False
                 time.sleep(0.05)
                 continue
 
-            # --- SCAN MÃ MÀU HP (logic debug_v3.py) ---
+            # --- SCAN MÃ MÀU HP — Dùng CombatRadarClass (nguồn sự thật duy nhất) ---
             try:
-                import pyautogui as _pag
-                start_x = CHECK_X - (SCAN_W // 2)
-                start_y = CHECK_Y - (SCAN_H // 2)
-                img     = _pag.screenshot(region=(start_x, start_y, SCAN_W, SCAN_H))
-                pixels  = list(img.getdata())
+                detected = self.radar.is_target_detected()
+                self.target_detected = detected
 
-                found_text_coords = []
-                red_count = 0
-
-                for i, p in enumerate(pixels):
-                    res = check_logic(p[0], p[1], p[2])
-                    if res in ("WHITE", "YELLOW"):
-                        abs_x = start_x + (i % SCAN_W)
-                        abs_y = start_y + (i // SCAN_W)
-                        if len(found_text_coords) < 2:
-                            found_text_coords.append(f"{res}:({abs_x},{abs_y})")
-                    elif res == "RED":
-                        red_count += 1
-
-                # RED>=2 hoặc có chữ WHITE/YELLOW → nhấn chuột
-                if red_count >= 2 or found_text_coords:
+                if detected:
                     if not self.is_pressing:
                         pydirectinput.mouseDown(button='left')
                         self.is_pressing = True
-                    if found_text_coords:
-                        logs = " | ".join(found_text_coords)
-                        print(f"\r[COLOR] {logs} R:{red_count}    ", end="")
-                    else:
-                        print(f"\r[COLOR] RED only (R:{red_count})    ", end="")
                 else:
                     if self.is_pressing:
                         pydirectinput.mouseUp(button='left')
                         self.is_pressing = False
-                    print(f"\r{' ' * 70}", end="")
+
+                # --- OLD CODE (REPLACED: In đè console bằng \r gây xung đột và nhấp nháy HUD) ---
+                # if detected:
+                #     print(f"\r[COLOR] Target detected                    ", end="")
+                # else:
+                #     print(f"\r{' ' * 70}", end="")
+                # --------------------------------------------------------------------------------
 
             except Exception as e:
+                self.target_detected = False
                 print(f"\n[COLOR ERROR] {e}")
                 if self.is_pressing:
                     pydirectinput.mouseUp(button='left')
@@ -412,6 +404,7 @@ class SacredBot:
             time.sleep(0.04)    # ~25 FPS — giống debug_v3.py
 
         # --- EXIT CLEANUP ---
+        self.target_detected = False
         if self.is_pressing:
             pydirectinput.mouseUp(button='left')
             self.is_pressing = False
@@ -444,7 +437,11 @@ class SacredBot:
                         buff['retry_start_time'] = 0
                     self.last_buff_finish_time = 0
                     self.last_buff_cast_delay = 0
-                # Khi is_running = False, yolo_worker guard tự nhả chuột — không cần xử lý ở đây
+                    # [NEW 2026-08-16] Auto-sync Color targeting theo N (Z/X vẫn override thủ công được)
+                    self.is_color_active = True
+                else:
+                    # Khi N tắt → tự tắt color targeting; color_worker guard tự nhả chuột
+                    self.is_color_active = False
                 
                 status_msg = 'Bot đã bật.' if self.is_running else 'Bot nghỉ ngơi.'
                 self.voice.speak(status_msg)
