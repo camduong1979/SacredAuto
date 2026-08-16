@@ -1,0 +1,115 @@
+{
+    "global": {
+        "selected_class": "WoodElf", 
+        "process_name": "sacred.exe",
+        "toggle_key": "v",
+        "cast_delay": 0.5
+    },
+
+    "potion_system": {
+    "enabled": true,
+    "threshold_percent": 30,
+    "key": "space"
+    },
+    "danger_system": {
+        "enabled": true,
+        "base_pointer_offset": 20881316,
+        "offsets": [3264],
+        "cooldown_after_fight": 2.0
+    },
+    "combat_system": {
+        "radar_center_x": 947,
+        "radar_center_y": 790,
+        "scan_width": 20,
+        "scan_height": 3,
+        "melee_hold_mode": true
+    },
+    "hotkey_system": {
+        "enabled": true,
+        "combos": [
+            {
+                "name": "Combo Q",
+                "trigger_key": "q",
+                "sequence": [
+                    {"action": "press", "key": "6", "wait": 0.05},
+                    {"action": "press", "key": "f1", "wait": 0.05}
+                ]
+            },
+            {
+                "name": "Combo W",
+                "trigger_key": "w",
+                "sequence": [
+                    {"action": "press", "key": "6", "wait": 0.05},
+                    {"action": "press", "key": "f2", "wait": 0.05}
+                ]
+            },
+            {
+                "name": "Combo E",
+                "trigger_key": "e",
+                "sequence": [
+                    {"action": "press", "key": "6", "wait": 0.05},
+                    {"action": "press", "key": "f3", "wait": 0.05}
+                ]
+            },
+            {
+                "name": "Combo R",
+                "trigger_key": "r",
+                "sequence": [
+                    {"action": "press", "key": "6", "wait": 0.05},
+                    {"action": "press", "key": "f4", "wait": 0.05}
+                ]
+            },
+            {
+                "name": "Combo T",
+                "trigger_key": "t",
+                "sequence": [
+                    {"action": "press", "key": "6", "wait": 0.05},
+                    {"action": "press", "key": "f5", "wait": 0.05}
+                ]
+            },
+            {
+                "name": "Combo Y",
+                "trigger_key": "y",
+                "sequence": [
+                    {"action": "press", "key": "6", "wait": 0.05},
+                    {"action": "press", "key": "f6", "wait": 0.05}
+                ]
+            }
+        ]
+    },
+    "classes": {
+        "WoofElf": {
+            "skills": [
+                {
+                    "name": "Đấm Liên Hoàn (Spam)",
+                    "type": "active", 
+                    "key": "1",
+                    "x": 1134, "y": 877,
+                    "color_rgb": [221, 255, 102],
+                    "tolerance": 30
+                },
+                {
+                    "name": "Hộ Thể (Buff)",
+                    "type": "buff",
+                    "key": "6",
+                    "x": 1170, "y": 875,
+                    "color_rgb": [200, 200, 50],
+                    "duration": 25,
+                    "tolerance": 30
+                }
+            ]
+        },
+        "Seraphim": {
+            "skills": [
+                {
+                    "name": "Sét Xoay (Active)",
+                    "type": "active",
+                    "key": "2",
+                    "x": 1134, "y": 877,
+                    "color_rgb": [100, 100, 255],
+                    "tolerance": 30
+                }
+            ]
+        }
+    }
+}

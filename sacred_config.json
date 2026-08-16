@@ -1,0 +1,193 @@
+{
+    "global": {
+        "selected_class": "WoodElf", 
+        "process_name": "sacred.exe",
+        "toggle_key": "d",
+        "cast_delay": 0.5
+    },
+
+    "potion_system": {
+    "enabled": true,
+    "threshold_percent": 30,
+    "key": "space"
+    },
+    "danger_system": {
+        "enabled": true,
+        "base_pointer_offset": 20881316,
+        "offsets": [3264],
+        "cooldown_after_fight": 5.0
+    },
+    "combat_system": {
+        "radar_center_x": 947,
+        "radar_center_y": 790,
+        "scan_width": 20,
+        "scan_height": 3,
+        "melee_hold_mode": true,
+        "buff_interval": 30
+    },
+    "auto_buff_system": {
+        "enabled": true,
+        "buffs": [
+            {
+                "id": "co_buff",
+                "name": "Buff Combo",
+                "enabled": true,
+                "interval": 30,
+                "cast_delay": 1,
+                "sentinel_enabled": true,
+                "sentinel_x": 1317,
+                "sentinel_y": 856,
+                "tolerance_rgb": 1,
+                "min_brightness": 14,
+                "max_brightness": 177,
+                "retry_timeout": 3.0,
+                "sequence": [
+                    {"action": "press", "key": "0", "wait": 0.30},
+                    {"action": "click_right", "key": "", "hold": 0.22, "wait": 0.5},
+                    {"action": "press", "key": "6", "wait": 0.30}
+                ]
+            },
+            {
+                "id": "ma_buff",
+                "name": "Buff Magic",
+                "enabled": true,
+                "interval": 55,
+                "cast_delay": 4.0,
+                "sentinel_enabled": true,
+                "sentinel_x": 1251,
+                "sentinel_y": 856,
+                "tolerance_rgb": 1,
+                "min_brightness": 14,
+                "max_brightness": 177,
+                "retry_timeout": 3.0,
+                "sequence": [
+                    {"action": "press", "key": "9", "wait": 0.20},
+                    {"action": "click_right", "key": "", "hold": 0.22, "wait": 0.50},
+                    {"action": "press", "key": "6", "wait": 0.20}
+                ]
+            },
+            {
+                "id": "ca_buff",
+                "name": "Buff CA",
+                "enabled": true,
+                "interval": 5,
+                "cast_delay": 1,
+                "sentinel_enabled": true,
+                "sentinel_x": 1185,
+                "sentinel_y": 856,
+                "tolerance_rgb": 1,
+                "min_brightness": 14,
+                "max_brightness": 177,
+                "retry_timeout": 3.0,
+                "sequence": [
+                    {"action": "press", "key": "8", "wait": 0.30},
+                    {"action": "click_right", "key": "", "hold": 0.20, "wait": 0.50},
+                    {"action": "press", "key": "6", "wait": 0.30}
+                ]
+            }
+        ]
+    },
+    "ai_system": {
+        "enabled": true,
+        "model_path": "yolov8n.pt",
+        "scan_size": 600,
+        "center_x": 958,
+        "center_y": 560,
+        "safe_box_w": 50,
+        "safe_box_h": 120,
+        "conf": 0.45,
+        "target_classes": ["creep", "person", "dog", "horse"]
+    },
+    "hotkey_system": {
+        "enabled": true,
+        "combos": [
+            {
+                "name": "Combo T",
+                "trigger_key": "t",
+                "sequence": [
+                    {"action": "press", "key": "6", "wait": 0.05},
+                    {"action": "press", "key": "f1", "wait": 0.05}
+                ]
+            },
+            {
+                "name": "Combo Y",
+                "trigger_key": "y",
+                "sequence": [
+                    {"action": "press", "key": "6", "wait": 0.05},
+                    {"action": "press", "key": "f2", "wait": 0.05}
+                ]
+            },
+            {
+                "name": "Combo U",
+                "trigger_key": "u",
+                "sequence": [
+                    {"action": "press", "key": "6", "wait": 0.05},
+                    {"action": "press", "key": "f3", "wait": 0.05},
+                    {"action": "click_right", "key": "", "wait": 0.05}
+                ]
+            },
+            {
+                "name": "Combo G",
+                "trigger_key": "g",
+                "sequence": [
+                    {"action": "press", "key": "6", "wait": 0.05},
+                    {"action": "press", "key": "f4", "wait": 0.05},
+                    {"action": "click_right", "key": "", "wait": 0.05}
+                ]
+            },
+            {
+                "name": "Combo V",
+                "trigger_key": "v",
+                "sequence": [
+                    {"action": "press", "key": "6", "wait": 0.05},
+                    {"action": "press", "key": "f5", "wait": 0.05},
+                    {"action": "click_right", "key": "", "wait": 0.05}
+                ]
+            },
+            {
+                "name": "Combo N",
+                "trigger_key": "n",
+                "sequence": [
+                    {"action": "press", "key": "6", "wait": 0.05},
+                    {"action": "press", "key": "f6", "wait": 0.05},
+                    {"action": "click_right", "key": "", "wait": 0.05}
+                ]
+            }
+        ]
+    },
+    "classes": {
+        "WoodElf": {
+            "skills": [
+                {
+                    "name": "Đấm Liên Hoàn (Spam)",
+                    "type": "active", 
+                    "key": "1",
+                    "x": 1134, "y": 877,
+                    "color_rgb": [221, 255, 102],
+                    "tolerance": 30
+                },
+                {
+                    "name": "Hộ Thể (Buff)",
+                    "type": "buff",
+                    "key": "6",
+                    "x": 1170, "y": 875,
+                    "color_rgb": [200, 200, 50],
+                    "duration": 25,
+                    "tolerance": 60
+                }
+            ]
+        },
+        "Seraphim": {
+            "skills": [
+                {
+                    "name": "Sét Xoay (Active)",
+                    "type": "active",
+                    "key": "2",
+                    "x": 1134, "y": 877,
+                    "color_rgb": [100, 100, 255],
+                    "tolerance": 30
+                }
+            ]
+        }
+    }
+}
