@@ -81,8 +81,14 @@ class SacredBot:
             (clean_msg[:20] + "..") if len(clean_msg) > 22 else clean_msg
         )
 
+        # --- OLD CODE (REPLACED) ---
+        # # 2. Thêm \033[K ở cuối để xóa sạch các ký tự dư thừa của dòng cũ
+        # hud_line = f"\rHP: {hp:5.1f}% | Threat: {threat:2d} | {event_short:<22}\033[K"
+        # ---------------------------
+        yolo_str = "ON" if self.is_yolo_active else "OFF"
+        target_str = "Aim" if self.is_pressing else "None"
         # 2. Thêm \033[K ở cuối để xóa sạch các ký tự dư thừa của dòng cũ
-        hud_line = f"\rHP: {hp:5.1f}% | Threat: {threat:2d} | {event_short:<22}\033[K"
+        hud_line = f"\rHP: {hp:5.1f}% | Threat: {threat:2d} | YOLO: {yolo_str:<3} | Target: {target_str:<4} | {event_short:<18}\033[K"
 
         sys.stdout.write(hud_line)
         sys.stdout.flush()
@@ -324,7 +330,10 @@ class SacredBot:
             if keyboard.is_pressed('z') and not self.is_yolo_active:
                 self.is_yolo_active = True
                 winsound.Beep(1000, 150)
-                print("\n[YOLO] BẬT targeting")
+                # --- OLD CODE (REPLACED) ---
+                # print("\n[YOLO] BẬT targeting")
+                # ---------------------------
+                self.last_event_msg = "YOLO Bật"
                 time.sleep(0.3)  # debounce
 
             if keyboard.is_pressed('x') and self.is_yolo_active:
@@ -333,7 +342,10 @@ class SacredBot:
                     pydirectinput.mouseUp(button='left')
                     self.is_pressing = False
                 winsound.Beep(500, 150)
-                print("\n[YOLO] TẮT targeting")
+                # --- OLD CODE (REPLACED) ---
+                # print("\n[YOLO] TẮT targeting")
+                # ---------------------------
+                self.last_event_msg = "YOLO Tắt"
                 time.sleep(0.3)  # debounce
 
             # --- GUARD: Dừng nếu chưa sẵn sàng hoặc bị tạm dừng ---

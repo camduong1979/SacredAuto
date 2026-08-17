@@ -88,7 +88,7 @@ class SacredBot:
         # hud_line = f"\rHP: {hp:5.1f}% | Threat: {threat:2d} | CLR: {clr_text} | {event_short:<22}\033[K"
         # ---------------------------
         target_str = "Aim" if self.target_detected else "None"
-        hud_line = f"\rHP: {hp:5.1f}% | Threat: {threat:2d} | Target: {target_str:<15} | {event_short:<22}\033[K"
+        hud_line = f"\rHP: {hp:5.1f}% | Threat: {threat:2d} | Target: {target_str} | {event_short}\033[K"
 
         sys.stdout.write(hud_line)
         sys.stdout.flush()
