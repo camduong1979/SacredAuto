@@ -157,3 +157,5 @@ cython_debug/
 # Project Specific (Audio Cache & Logs & Local model/weights if needed)
 google_voice_cache/
 *.log
+sacred_config.json
+
