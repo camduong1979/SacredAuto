@@ -338,6 +338,8 @@ class SacredBot:
 
             if keyboard.is_pressed('x') and self.is_yolo_active:
                 self.is_yolo_active = False
+                if self.ai_sys:
+                    self.ai_sys.reset_lock()
                 if self.is_pressing:
                     pydirectinput.mouseUp(button='left')
                     self.is_pressing = False
@@ -352,6 +354,8 @@ class SacredBot:
             if not (self.game_connected and self.is_running
                     and self.is_yolo_active
                     and self.ai_sys and self.radar):
+                if self.ai_sys and self.ai_sys.locked_target:
+                    self.ai_sys.reset_lock()
                 if self.is_pressing:        # Nhả chuột nếu bị gián đoạn giữa chừng
                     pydirectinput.mouseUp(button='left')
                     self.is_pressing = False
@@ -359,31 +363,63 @@ class SacredBot:
                 continue
 
             # --- YOLO DETECT + RADAR CONFIRM ---
+            # --- OLD CODE (REPLACED) ---
+            # try:
+            #     # --- OLD CODE (REPLACED) ---
+            #     # target_pos = self.ai_sys.get_best_target()
+            #     # ---------------------------
+            #     target_pos = self.ai_sys.get_best_target(debug=True)
+            # 
+            #     if target_pos:
+            #         tx, ty = target_pos
+            #         pydirectinput.moveTo(tx, ty, _pause=False)
+            # 
+            #         if self.radar.is_target_detected():     # Thanh HP xác nhận → BEM
+            #             if not self.is_pressing:
+            #                 pydirectinput.mouseDown(button='left')
+            #                 self.is_pressing = True
+            #         else:                                   # Radar fail → nhả tay
+            #             if self.is_pressing:
+            #                 pydirectinput.mouseUp(button='left')
+            #                 self.is_pressing = False
+            #     else:                                       # Mất target → nhả tay
+            #         if self.is_pressing:
+            #             pydirectinput.mouseUp(button='left')
+            #             self.is_pressing = False
+            # 
+            # except Exception as e:
+            #     print(f"\n[YOLO ERROR] {e}")
+            #     if self.is_pressing:
+            #         pydirectinput.mouseUp(button='left')
+            #         self.is_pressing = False
+            # ---------------------------
             try:
-                # --- OLD CODE (REPLACED) ---
-                # target_pos = self.ai_sys.get_best_target()
-                # ---------------------------
                 target_pos = self.ai_sys.get_best_target(debug=True)
 
                 if target_pos:
                     tx, ty = target_pos
                     pydirectinput.moveTo(tx, ty, _pause=False)
 
-                    if self.radar.is_target_detected():     # Thanh HP xác nhận → BEM
+                    if self.radar.is_target_detected():     # Thanh HP xác nhận → BEM & KHÓA MỤC TIÊU
+                        self.ai_sys.confirm_lock(target_pos) # Kích hoạt trạng thái TRACKING trong YOLO
                         if not self.is_pressing:
                             pydirectinput.mouseDown(button='left')
                             self.is_pressing = True
-                    else:                                   # Radar fail → nhả tay
+                    else:                                   # Radar fail (quái chết/mất máu) → Hủy khóa & nhả tay
+                        self.ai_sys.reset_lock()
                         if self.is_pressing:
                             pydirectinput.mouseUp(button='left')
                             self.is_pressing = False
-                else:                                       # Mất target → nhả tay
+                else:                                       # Mất target → Hủy khóa & nhả tay
+                    self.ai_sys.reset_lock()
                     if self.is_pressing:
                         pydirectinput.mouseUp(button='left')
                         self.is_pressing = False
 
             except Exception as e:
                 print(f"\n[YOLO ERROR] {e}")
+                if self.ai_sys:
+                    self.ai_sys.reset_lock()
                 if self.is_pressing:
                     pydirectinput.mouseUp(button='left')
                     self.is_pressing = False

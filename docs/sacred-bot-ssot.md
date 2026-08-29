@@ -1,7 +1,7 @@
 # 📖 Sacred Bot — SSOT (Single Source of Truth)
 
-> **Phiên bản:** v2.0 (Sacred_Bot.py)  
-> **Cập nhật lần cuối:** 2026-08-11  
+> **Phiên bản:** v2.5 (Sacred_Bot.py & sacred_mele_memory.py)  
+> **Cập nhật lần cuối:** 2026-08-29  
 > **Target Game:** Sacred (sacred.exe) — Windows  
 > **Yêu cầu:** Python 3.x · Administrator privileges · CUDA GPU (cho AI mode)
 
@@ -22,14 +22,17 @@
    - [YOLOManager](#47-yolomanager---yolomanagerclasspyy)
    - [SacredUtils](#48-sacredutils---sacredutilspy)
    - [SkillManager (Deprecated)](#49-skillmanager-deprecated---skillmanagerclasspy)
+   - [SkillCooldownManager](#410-skillcooldownmanager---skillcooldownclasspy)
+   - [SacredMeleMemory](#411-sacredmelememory---sacred_mele_memorypy)
 5. [Cấu hình — sacred_config.json](#5-cấu-hình--sacred_configjson)
 6. [Memory Map](#6-memory-map)
 7. [Luồng dữ liệu & Threading](#7-luồng-dữ-liệu--threading)
-8. [Hotkey & Combo System](#8-hotkey--combo-system)
-9. [Dependencies](#9-dependencies)
-10. [Hướng dẫn khởi chạy](#10-hướng-dẫn-khởi-chạy)
-11. [Biến quan trọng & Hằng số](#11-biến-quan-trọng--hằng-số)
-12. [Lưu ý & Known Issues](#12-lưu-ý--known-issues)
+8. [Cơ chế Target & Xác nhận Quái chết Đa Tầng](#8-cơ-chế-target--xác-nhận-quái-chết-đa-tầng)
+9. [Hotkey & Combo System](#9-hotkey--combo-system)
+10. [Dependencies](#10-dependencies)
+11. [Hướng dẫn khởi chạy](#11-hướng-dẫn-khởi-chạy)
+12. [Biến quan trọng & Hằng số](#12-biến-quan-trọng--hằng-số)
+13. [Lưu ý & Known Issues](#13-lưu-ý--known-issues)
 
 ---
 
@@ -91,13 +94,15 @@ SacredAuto/
 ├── requirements.txt        ← Danh sách thư viện
 ├── Run_Sacred_Bot.bat      ← Shortcut chạy bot (Admin)
 │
-├── AutoPotionClass.py      ← Module đọc HP & uống máu tự động
-├── DangerSystemClass.py    ← Module đọc Threat level (số quái)
+├── AutoPotionClass.py      ← Module đọc HP, EXP & uống máu tự động
+├── DangerSystemClass.py    ← Module đọc Threat, Monster IDs & Mouse Hover ID
 ├── HotKeySetClass.py       ← Module hotkey macro & combo skill
 ├── CombatRadarClass.py     ← Module phát hiện quái bằng pixel scan
 ├── VoiceAssistant.py       ← Module thông báo giọng nói (Google TTS)
 ├── SacredUtils.py          ← Hàm tiện ích dùng chung (pointer resolver)
 ├── YOLOManagerClass.py     ← Module AI nhận diện quái (YOLOv8 + CUDA)
+├── SkillCooldownClass.py   ← Module Hook ASM & đọc Memory Cooldown Skill (00562B13)
+├── sacred_mele_memory.py   ← Entry point Melee Bot (Full Memory Detection & Targeting)
 │
 ├── best.pt                 ← YOLO model đã train (sacred creep)
 ├── yolov8n.pt              ← YOLO pretrained base model
@@ -161,23 +166,30 @@ SacredAuto/
 
 ### 4.2 `AutoPotion` — `AutoPotionClass.py`
 
-**Vai trò:** Đọc HP hiện tại từ RAM game, tính % để trigger uống máu.
+**Vai trò:** Đọc HP và EXP hiện tại của nhân vật từ RAM game.
 
 #### Memory Address
 
 | Hằng số | Giá trị | Mô tả |
 |---|---|---|
-| `BASE_OFFSET` | `0x006D5C40` | Offset từ module base tới con trỏ HP |
-| `OFFSETS` | `[0x4, 0x4, 0x4D8]` | Chuỗi pointer 3 tầng |
+| `BASE_OFFSET` | `0x006D5C40` | Offset từ module base tới con trỏ HP & EXP |
+| `OFFSETS` | `[0x4, 0x4, 0x4D8]` | Chuỗi pointer 3 tầng đọc Máu |
+| `EXP_OFFSETS` | `[0x4, 0x4, 0x3B4]` | Chuỗi pointer 3 tầng đọc Kinh nghiệm (EXP) |
 
-#### Cách tính HP
+#### Cách tính HP & Đọc EXP
 
 ```
 static_base  = module_addr + 0x006D5C40
+
+# HP:
 hp_addr      = get_pointer_address(pm, static_base, [0x4, 0x4, 0x4D8])
 curr_hp      = pm.read_int(hp_addr)
 max_hp       = pm.read_int(hp_addr - 4)   -- Max HP nằm trước 4 bytes
 hp_percent   = (curr_hp / max_hp) * 100
+
+# EXP:
+exp_addr     = get_pointer_address(pm, static_base, [0x4, 0x4, 0x3B4])
+total_exp    = pm.read_int(exp_addr)
 ```
 
 #### API
@@ -185,25 +197,33 @@ hp_percent   = (curr_hp / max_hp) * 100
 | Method | Returns | Mô tả |
 |---|---|---|
 | `get_hp_percent()` | `float or None` | Trả về % HP (0–100), `None` nếu lỗi |
+| `get_exp()` | `int or None` | Trả về tổng điểm kinh nghiệm (EXP) hiện tại của nhân vật |
 
 ---
 
 ### 4.3 `DangerSystem` — `DangerSystemClass.py`
 
-**Vai trò:** Đọc "Threat Level" từ RAM — giá trị này > 0 khi có quái gần.
+**Vai trò:** Đọc "Threat Level" từ RAM, quét danh sách ID quái vật hiện hữu và đọc ID đối tượng đang hover dưới chuột.
 
 #### Memory Address
 
 | Hằng số | Giá trị | Mô tả |
 |---|---|---|
-| `BASE_OFFSET` | `0x013E9FA4` | Offset từ module base tới con trỏ Quái |
-| `OFFSETS` | `[0xCC0]` | Pointer 1 tầng |
+| `BASE_OFFSET` | `0x013E9FA4` | Base Quái / Threat |
+| `OFFSETS` | `[0xD38]` | Pointer Threat level (hoặc `[0xCC0]`) |
+| `MONSTER_STRUCT_SIZE` | `0x88` (136 bytes) | Bước nhảy (stride) giữa các struct quái |
+| `MONSTER_START_OFFSET` | `0xE30` | Offset struct quái đầu tiên |
+| `MOUSE_HOVER_BASE` | `0x008DDB5C` | Base chuột trỏ đối tượng |
+| `MOUSE_HOVER_OFFSET` | `0x6C` | Offset ID đối tượng dưới trỏ chuột |
 
 #### API
 
 | Method | Returns | Mô tả |
 |---|---|---|
 | `get_threat_level()` | `int` | Giá trị threat (0 = an toàn, > 0 = có quái) |
+| `get_monster_ids(max_monsters=10)` | `set[int]` | Quét danh sách ID các con quái đang sống trong RAM |
+| `get_mouse_hover_id()` | `int` | Đọc ID đối tượng dưới chuột (0: trống, 1: bản thân, > 1: NPC/quái) |
+| `is_hovering_monster(monster_ids=None)` | `tuple[bool, int]` | Trả về `(is_monster, hover_id)` xác nhận chuột trỏ đúng quái |
 
 ---
 
@@ -396,6 +416,46 @@ Giải quyết chuỗi pointer đa tầng trong RAM game.
 
 ---
 
+### 4.10 `SkillCooldownManager` — `SkillCooldownClass.py`
+
+**Vai trò:** Quản lý tự động Inject Hook ASM tại `00562B13` vào bộ nhớ `Sacred.exe`, đọc giá trị Cooldown Skill float chính xác 100% để phục vụ Auto Buff độc lập (Magic & CA).
+
+#### Hook Specification
+
+| Thuộc tính | Giá trị | Mô tả |
+|---|---|---|
+| `HOOK_ADDR` | `0x00562B13` | Điểm tiêm lệnh nhảy `jmp newmem + 3*NOP` (8 bytes) |
+| `ORIGINAL_BYTES` | `D8 6C 0E 12 D9 5C 0E 12` | `fsubr [esi+ecx+12]` + `fstp [esi+ecx+12]` |
+| `ALLOC_SIZE` | `2048` bytes | Vùng nhớ cấp phát động trong `Sacred.exe` |
+| `PTR_OFFSET` | `+0x100` | Địa chỉ biến lưu con trỏ `cooldownAddressPtr` |
+
+#### API
+
+| Method | Returns | Mô tả |
+|---|---|---|
+| `install()` | `bool` | Cấp phát bộ nhớ, ghi bytecode hook và kích hoạt chuyển hướng |
+| `get_cooldown()` | `float or None` | Đọc giá trị cooldown hiện tại (0.0 = Ready, > 0 = Cooldown) |
+| `is_ready()` | `bool` | Trả về `True` nếu cooldown <= 0.001 |
+| `is_on_cooldown()` | `bool` | Trả về `True` nếu cooldown > 0.001 |
+| `uninstall()` | `None` | Khôi phục 8 bytes mã gốc của game an toàn |
+
+---
+
+### 4.11 `SacredMeleMemory` — `sacred_mele_memory.py`
+
+**Vai trò:** Phiên bản Bot Melee tối ưu hoàn toàn qua đọc bộ nhớ (Zero Screen Scanning), tích hợp giám sát EXP, quét ID đối tượng dưới chuột (Hover ID), khóa mục tiêu và điều phối chuột thông minh.
+
+#### Các Thread hoạt động
+
+| Thread | Tần suất | Vai trò |
+|---|---|---|
+| `memory_sensor_worker` | 50ms (20 FPS) | Đọc song song HP, Threat, EXP, Danh sách Monster IDs (`get_monster_ids`) và Hover ID (`get_mouse_hover_id`) |
+| `combat_worker` | 20ms (50 FPS) | Điều phối Auto Buff độc lập (Fast-Retry), Auto Bơm máu, Giám sát tăng EXP (quái chết) & Safe Clear |
+| `memory_target_worker` | 20ms (50 FPS) | So khớp Hover ID với danh sách Monster IDs để bật/tắt cờ `target_detected` & `target_locked_id` |
+| `mouse_arbiter_worker` | 10ms (100 FPS) | Bộ trọng tài chuột thống nhất: Điều khiển đè/nhả Chuột Trái (Target OR Phím Z) và Chuột Phải (Phím X) |
+
+---
+
 ## 5. Cấu hình — `sacred_config.json`
 
 File cấu hình tập trung duy nhất. **Mọi thay đổi cần chỉnh sửa ở đây, không hard-code trong code.**
@@ -499,29 +559,54 @@ File cấu hình tập trung duy nhất. **Mọi thay đổi cần chỉnh sửa
 
 > **Cảnh báo:** Các địa chỉ này dành riêng cho version Sacred đã scan. Cần update thủ công nếu game patch.
 
-### HP (AutoPotion)
+### HP & EXP (AutoPotion)
 
 ```
 sacred.exe  +  0x006D5C40
     → read_int(base)
     → read_int(ptr + 0x4)
     → read_int(ptr2 + 0x4)
-    → HP_ADDR = ptr3 + 0x4D8
+    → HP_ADDR  = ptr3 + 0x4D8
+    → EXP_ADDR = ptr3 + 0x3B4
 
-pm.read_int(HP_ADDR)     = Current HP
-pm.read_int(HP_ADDR - 4) = Max HP
+pm.read_int(HP_ADDR)     = Current HP (int32)
+pm.read_int(HP_ADDR - 4) = Max HP (int32)
+pm.read_int(EXP_ADDR)    = Total Character EXP (int32)
 ```
 
-### Threat Level (DangerSystem)
+### Threat Level & Monster Structs (DangerSystem)
 
 ```
 sacred.exe  +  0x013E9FA4
     → read_int(base)
-    → THREAT_ADDR = ptr + 0xCC0
+    → THREAT_ADDR        = ptr + 0xD38 (hoặc 0xCC0)
+    → MONSTER_SLOT_0_PTR = ptr + 0xE30
+    → MONSTER_SLOT_i_PTR = ptr + 0xE30 + (i * 0x88)  (Stride = 0x88 bytes)
 
-pm.read_int(THREAT_ADDR) = Threat Level
-    0   = Safe (không có quái)
-    > 0 = Có quái gần nhân vật
+pm.read_int(THREAT_ADDR) = Threat Level (0 = Safe, > 0 = Danger)
+pm.read_int(SLOT_i_PTR)  = Monster ID (> 0 khi slot có quái)
+```
+
+### Mouse Hover Object ID (DangerSystem)
+
+```
+sacred.exe  +  0x008DDB5C
+    → read_int(base)
+    → HOVER_ADDR = ptr + 0x6C
+
+pm.read_int(HOVER_ADDR)  = Object ID dưới con trỏ chuột
+    0   = Trống / Địa hình
+    1   = Nhân vật của mình
+    > 1 = ID của NPC / Quái vật mục tiêu
+```
+
+### Skill Cooldown Hook (SkillCooldownClass)
+
+```
+sacred.exe  +  0x00562B13 (Bytecode: D8 6C 0E 12 D9 5C 0E 12)
+    → Hook JMP to allocated memory
+    → Lưu con trỏ cooldown tại: alloc_addr + 0x100
+    → read_float(read_int(alloc_addr + 0x100)) = Cooldown Float (0.0 = Sẵn sàng, > 0 = Cooldown)
 ```
 
 ---
@@ -533,34 +618,97 @@ pm.read_int(THREAT_ADDR) = Threat Level
 | Thread | Interval | Nhiệm vụ |
 |---|---|---|
 | `main` (run loop) | 100ms | Toggle ON/OFF, exit detection, reconnect |
-| `sensor_worker` | 100ms | Đọc HP + Threat từ RAM |
-| `action_worker` | 20ms | Logic buff / potion / hotkey |
+| `sensor_worker` | 100ms / 50ms | Đọc HP, Threat, EXP, Monster IDs, Hover ID từ RAM |
+| `action_worker` / `combat_worker` | 20ms | Logic buff, potion, EXP monitoring, safe timer |
+| `memory_target_worker` | 20ms | So khớp Hover ID với Monster IDs, kích hoạt target lock |
+| `mouse_arbiter_worker` | 10ms | Điều phối đè/nhả chuột trái/phải không xung đột |
 | `VoiceAssistant._worker` | blocking | Phát audio từ queue |
 
 ### Thread-safe Data Flow
 
 ```
-sensor_worker                          action_worker
-─────────────                          ─────────────
-hp     = potion_sys.get_hp_percent()
-threat = danger_sys.get_threat_level()
+memory_sensor_worker                     combat_worker / target_worker
+────────────────────                     ─────────────────────────────
+hp         = potion_sys.get_hp_percent()
+exp        = potion_sys.get_exp()
+threat     = danger_sys.get_threat_level()
+monsters   = danger_sys.get_monster_ids()
+hover_id   = danger_sys.get_mouse_hover_id()
 
-with _data_lock:                       with _data_lock:
-    shared_data['hp_percent'] = hp         hp     = shared_data['hp_percent']
-    shared_data['threat_level'] = threat   threat = shared_data['threat_level']
+with _data_lock:                         with _data_lock:
+    shared_data['hp_percent']   = hp         hp       = shared_data['hp_percent']
+    shared_data['exp']          = exp        exp      = shared_data['exp']
+    shared_data['threat_level'] = threat     threat   = shared_data['threat_level']
+    shared_data['monster_ids']  = monsters   monsters = shared_data['monster_ids']
+    shared_data['hover_id']     = hover_id   hover_id = shared_data['hover_id']
 ```
 
 ### Reconnect Logic
 
-Khi `game_connected = False` (do exception trong `sensor_worker`):
+Khi `game_connected = False` (do exception trong sensor worker):
 
-1. `action_worker` tự tạm dừng (kiểm tra `game_connected` đầu vòng lặp)
-2. `main loop` phát hiện → gọi `connect_game()` lại
-3. Nếu thành công → cả 2 worker tiếp tục tự động
+1. Worker tạm dừng thực thi hành vi game
+2. `main loop` phát hiện → gọi `connect_game()` thử lại
+3. Nếu thành công → các worker tiếp tục tự động
 
 ---
 
-## 8. Hotkey & Combo System
+## 8. Cơ chế Target & Xác nhận Quái chết Đa Tầng
+
+> **Nguyên lý cốt lõi:** Khi đánh quái, bot nhận diện quái chết qua sự kiện **tăng EXP** kết hợp cùng trạng thái **Memory ID Entity** để nhả khóa mục tiêu (`target_detected = False`) một cách tức thì và mượt mà.
+
+### 8.1 Cơ chế Xác nhận Quái chết 4 Tầng (Multi-Tier Target Disengagement)
+
+```
+                       ┌──────────────────────────────┐
+                       │  ĐANG TẤN CÔNG MỤC TIÊU      │
+                       │  (target_detected = True)    │
+                       └──────────────┬───────────────┘
+                                      │
+          ┌───────────────────────────┼───────────────────────────┐
+          ▼                           ▼                           ▼
+┌──────────────────┐        ┌──────────────────┐        ┌──────────────────┐
+│  TẦNG 1: EXP     │        │  TẦNG 2: MEMORY  │        │  TẦNG 3: HOVER   │
+│  exp > last_exp  │        │  ID biến mất     │        │  hover_id <= 1   │
+│  (Quái bị diệt)  │        │  khỏi monster_ids│        │  (Rời trỏ chuột) │
+└─────────┬────────┘        └─────────┬────────┘        └─────────┬────────┘
+          │                           │                           │
+          └───────────────────────────┼───────────────────────────┘
+                                      ▼
+                       ┌──────────────────────────────┐
+                       │   XÁC NHẬN MỤC TIÊU HỦY/CHẾT │
+                       │   - target_detected = False  │
+                       │   - target_locked_id = 0     │
+                       │   - Nhả đè Chuột Trái        │
+                       │   - Chuyển sang quái tiếp    │
+                       └──────────────────────────────┘
+```
+
+1. **Tầng 1 — Giám sát Biến động EXP (`combat_worker`):**
+   - Đọc liên tục điểm kinh nghiệm nhân vật từ RAM (`get_exp()`).
+   - Khi `last_exp > 0` và `exp > last_exp`: Xác nhận có quái bị tiêu diệt (`+exp_gained EXP!`).
+   - Ngay lập tức đặt `self.target_detected = False` và `self.target_locked_id = 0`.
+2. **Tầng 2 — Hủy Struct Entity trong RAM (`memory_target_worker`):**
+   - Khi quái chết, engine game Sacred thu hồi struct của quái đó.
+   - Hàm `get_monster_ids()` không còn chứa `target_locked_id` ➔ Bot nhận diện `target_locked_id not in monster_ids` và tự động nhả target.
+3. **Tầng 3 — Trỏ chuột thoát khỏi quái (`Hover ID`):**
+   - Khi quái tan biến hoặc người chơi lia chuột đi nơi khác, `hover_id` trở về `<= 1` ➔ Nhả cờ target.
+4. **Tầng 4 — Quét sạch Bãi Quái (Safe Clear Timer):**
+   - Khi `threat == 0` kéo dài liên tục > 3.0 giây thực (`safe_start_time`), bot phát giọng nói `"Clear."`, đưa `is_in_combat = False` và dọn sạch trạng thái target.
+
+### 8.2 Bộ Trọng tài Chuột Thống nhất (`mouse_arbiter_worker`)
+
+- **Chuột Trái (`mouseDown('left')`):**
+  $$\text{should\_left\_down} = \text{target\_detected} \lor \text{keyboard.is\_pressed('z')}$$
+  - Khi đè `Z` chạy map: Giữ chuột liên tục không giật lag.
+  - Khi chuột chạm vào quái (`target_detected == True`): Tự động đè chuột đánh quái.
+  - Khi quái chết (EXP tăng / ID mất): Tự động nhả chuột trái ngay lập tức (nếu không đè `Z`).
+- **Chuột Phải (`mouseDown('right')`):**
+  - Đồng bộ trực tiếp theo phím `X` của người chơi.
+
+---
+
+## 9. Hotkey & Combo System
 
 ### Combo hiện tại (theo config)
 
@@ -592,7 +740,7 @@ Khi `game_connected = False` (do exception trong `sensor_worker`):
 
 ---
 
-## 9. Dependencies
+## 10. Dependencies
 
 ### `requirements.txt`
 
@@ -626,7 +774,7 @@ pip install gtts ultralytics opencv-python
 
 ---
 
-## 10. Hướng dẫn khởi chạy
+## 11. Hướng dẫn khởi chạy
 
 ### Cách 1: File .bat (Khuyên dùng)
 
@@ -639,6 +787,9 @@ Chuột phải Run_Sacred_Bot.bat → "Run as administrator"
 ```bash
 # Bắt buộc chạy với quyền Admin
 python Sacred_Bot.py
+
+# Hoặc chạy bản Melee Memory
+python sacred_mele_memory.py
 ```
 
 ### Quy trình khởi động
@@ -662,7 +813,7 @@ python Sacred_Bot.py
 
 ---
 
-## 11. Biến quan trọng & Hằng số
+## 12. Biến quan trọng & Hằng số
 
 ### Timing Constants
 
@@ -672,7 +823,7 @@ python Sacred_Bot.py
 | Potion cooldown | 0.8s | Hard-code `action_worker` | Min thời gian giữa 2 lần uống máu |
 | Safe timer | 3.0s | Hard-code `action_worker` | Chờ sau khi threat=0 trước khi nói "Clear" |
 | Voice spam guard | 3.0s | Hard-code `action_worker` | Cooldown thông báo "Bơm máu!" |
-| Sensor interval | 0.1s | Hard-code `sensor_worker` | Tần suất đọc memory |
+| Sensor interval | 0.1s / 0.05s | Hard-code `sensor_worker` | Tần suất đọc memory |
 | Action interval | 0.02s | Hard-code `action_worker` | Tần suất thực thi logic |
 | Main loop interval | 0.1s | Hard-code `run()` | Tần suất poll toggle/exit |
 | Toggle debounce | 0.4s | Hard-code `run()` | Tránh double-toggle khi nhấn phím |
@@ -683,6 +834,8 @@ python Sacred_Bot.py
 |---|---|
 | `D` (config: `toggle_key`) | Bật / Tắt bot |
 | `ESC` | Thoát bot hoàn toàn |
+| `Z` | Đè để di chuyển / đánh tay mượt mà |
+| `X` | Đè để thi triển chiêu chuột phải |
 | `T` | Kích hoạt Combo T |
 | `Y` | Kích hoạt Combo Y |
 | `U` | Kích hoạt Combo U |
@@ -692,7 +845,7 @@ python Sacred_Bot.py
 
 ---
 
-## 12. Lưu ý & Known Issues
+## 13. Lưu ý & Known Issues
 
 ### Design Decisions
 

@@ -3,8 +3,9 @@ from SacredUtils import get_pointer_address # Import hàm dùng chung
 
 class AutoPotion:
     # --- HARD-CODE ĐỊA CHỈ TẠI ĐÂY (KHÔNG SỢ SAI) ---
-    BASE_OFFSET = 0x006D5C40        # Base Máu
+    BASE_OFFSET = 0x006D5C40        # Base Máu & EXP Nhân vật
     OFFSETS = [0x4, 0x4, 0x4D8]     # Offset Máu
+    EXP_OFFSETS = [0x4, 0x4, 0x3B4] # Offset Kinh nghiệm (EXP)
     # -----------------------------------------------
 
     def __init__(self, pm, module_addr):
@@ -30,4 +31,17 @@ class AutoPotion:
                     return percent
         except Exception as e:
             print(f"[POTION ERROR] {e}")
+        return None
+
+    def get_exp(self):
+        """Đọc tổng điểm kinh nghiệm (EXP) hiện tại của nhân vật."""
+        if not self.pm or self.module_addr is None:
+            return None
+        try:
+            static_base = self.module_addr + self.BASE_OFFSET
+            exp_addr = get_pointer_address(self.pm, static_base, self.EXP_OFFSETS)
+            if exp_addr:
+                return self.pm.read_int(exp_addr)
+        except Exception as e:
+            print(f"[EXP ERROR] {e}")
         return None

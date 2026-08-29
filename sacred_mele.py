@@ -48,9 +48,11 @@ class SacredBot:
         self.last_speak_time = 0        
         self.is_pressing = False
 
-        # Biến điều khiển Color Worker (Z bật thủ công / X tắt thủ công / N auto-sync)
+        # Biến điều khiển Color Worker (N auto-sync)
         self.is_color_active = False    # Flag bật/tắt luồng Color targeting
         self.target_detected = False    # Trạng thái phát hiện mục tiêu để hiển thị lên Live HUD
+        self.is_left_down = False       # Trạng thái thực tế chuột trái (Unified Mouse Arbiter)
+        self.is_right_down = False      # Trạng thái thực tế chuột phải (Phím X)
 
         self.sct = None                     # Lazy init trong luồng worker để tránh lỗi thread-local srcdc Windows
         self.buff_queue = self._init_buff_system()
@@ -348,72 +350,164 @@ class SacredBot:
 
         while not self.exit_event.is_set():
 
-            # --- TOGGLE Z / X (Override thủ công) ---
-            if keyboard.is_pressed('z') and not self.is_color_active:
-                self.is_color_active = True
-                winsound.Beep(1000, 150)
-                print("\n[COLOR] BẬT targeting (thủ công)")
-                time.sleep(0.3)  # debounce
-
-            if keyboard.is_pressed('x') and self.is_color_active:
-                self.is_color_active = False
-                if self.is_pressing:
-                    pydirectinput.mouseUp(button='left')
-                    self.is_pressing = False
-                winsound.Beep(500, 150)
-                print("\n[COLOR] TẮT targeting (thủ công)")
-                time.sleep(0.3)  # debounce
+            # --- OLD CODE (REPLACED: Toggle Z / X thủ công cho Color targeting) ---
+            # if keyboard.is_pressed('z') and not self.is_color_active:
+            #     self.is_color_active = True
+            #     winsound.Beep(1000, 150)
+            #     print("\n[COLOR] BẬT targeting (thủ công)")
+            #     time.sleep(0.3)  # debounce
+            #
+            # if keyboard.is_pressed('x') and self.is_color_active:
+            #     self.is_color_active = False
+            #     if self.is_pressing:
+            #         pydirectinput.mouseUp(button='left')
+            #         self.is_pressing = False
+            #     winsound.Beep(500, 150)
+            #     print("\n[COLOR] TẮT targeting (thủ công)")
+            #     time.sleep(0.3)  # debounce
+            # ---------------------------------------------------------------------
 
             # --- GUARD: Dừng nếu chưa sẵn sàng hoặc bị tạm dừng ---
             if not (self.game_connected and self.is_running and self.is_color_active):
                 self.target_detected = False
-                if self.is_pressing:
-                    pydirectinput.mouseUp(button='left')
-                    self.is_pressing = False
                 time.sleep(0.05)
                 continue
 
             # --- SCAN MÃ MÀU HP — Dùng CombatRadarClass (nguồn sự thật duy nhất) ---
             try:
-                detected = self.radar.is_target_detected()
-                self.target_detected = detected
-
-                if detected:
-                    if not self.is_pressing:
-                        pydirectinput.mouseDown(button='left')
-                        self.is_pressing = True
-                else:
-                    if self.is_pressing:
-                        pydirectinput.mouseUp(button='left')
-                        self.is_pressing = False
-
-                # --- OLD CODE (REPLACED: In đè console bằng \r gây xung đột và nhấp nháy HUD) ---
+                # --- OLD CODE (REPLACED: color_worker tự gọi mouseDown/Up gây tranh chấp chuột) ---
+                # detected = self.radar.is_target_detected()
+                # self.target_detected = detected
                 # if detected:
-                #     print(f"\r[COLOR] Target detected                    ", end="")
+                #     if not self.is_pressing:
+                #         pydirectinput.mouseDown(button='left')
+                #         self.is_pressing = True
                 # else:
-                #     print(f"\r{' ' * 70}", end="")
+                #     if self.is_pressing:
+                #         pydirectinput.mouseUp(button='left')
+                #         self.is_pressing = False
                 # --------------------------------------------------------------------------------
+                self.target_detected = self.radar.is_target_detected()
 
             except Exception as e:
                 self.target_detected = False
                 print(f"\n[COLOR ERROR] {e}")
-                if self.is_pressing:
-                    pydirectinput.mouseUp(button='left')
-                    self.is_pressing = False
 
             time.sleep(0.04)    # ~25 FPS — giống debug_v3.py
 
         # --- EXIT CLEANUP ---
         self.target_detected = False
-        if self.is_pressing:
+
+    # --- OLD CODE (REPLACED: manual_control_worker cũ xử lý riêng lẻ theo Threat) ---
+    # def manual_control_worker(self):
+    #     """[NEW 2026-08-22] Luồng giả lập chuột độc lập qua phím Z (chuột trái) và X (chuột phải).
+    #     - Khi threat == 0: Đè Z -> mouseDown('left'), Nhả Z -> mouseUp('left') để di chuyển / đánh thường.
+    #     - Khi threat > 0: Vô hiệu hóa phím Z (nhường toàn bộ quyền điều khiển chuột trái cho color_worker auto combat).
+    #     - Phím X: Đè X -> mouseDown('right'), Nhả X -> mouseUp('right') để dùng chiêu chuột phải.
+    #     """
+    #     while not self.exit_event.is_set():
+    #         if not (self.game_connected and self.is_running):
+    #             if self.is_manual_left_down:
+    #                 pydirectinput.mouseUp(button='left')
+    #                 self.is_manual_left_down = False
+    #             if self.is_manual_right_down:
+    #                 pydirectinput.mouseUp(button='right')
+    #                 self.is_manual_right_down = False
+    #             time.sleep(0.05)
+    #             continue
+    #         with self._data_lock:
+    #             threat = self.shared_data.get('threat_level', 0)
+    #         if threat == 0:
+    #             if keyboard.is_pressed('z'):
+    #                 if not self.is_manual_left_down:
+    #                     pydirectinput.mouseDown(button='left')
+    #                     self.is_manual_left_down = True
+    #             else:
+    #                 if self.is_manual_left_down:
+    #                     pydirectinput.mouseUp(button='left')
+    #                     self.is_manual_left_down = False
+    #         else:
+    #             if self.is_manual_left_down:
+    #                 pydirectinput.mouseUp(button='left')
+    #                 self.is_manual_left_down = False
+    #         if keyboard.is_pressed('x'):
+    #             if not self.is_manual_right_down:
+    #                 pydirectinput.mouseDown(button='right')
+    #                 self.is_manual_right_down = True
+    #         else:
+    #             if self.is_manual_right_down:
+    #                 pydirectinput.mouseUp(button='right')
+    #                 self.is_manual_right_down = False
+    #         time.sleep(0.01)
+    # ---------------------------------------------------------------------------------
+
+    def mouse_arbiter_worker(self):
+        """[NEW 2026-08-22] Bộ Trọng tài chuột thống nhất (Unified Mouse Arbiter).
+        - Logic Chuột Trái (OR Condition):
+            Đè Chuột Trái = (Auto phát hiện quái [self.target_detected]) OR (Người chơi đè phím Z)
+            -> Khi đè Z chạy map: Giữ chuột liên tục.
+            -> Khi gặp quái: Giữ chuột mượt mà không ngắt quãng.
+            -> Khi nhả Z nhưng quái còn: Auto tiếp tục giữ chuột đánh.
+            -> Khi hết quái và nhả Z: Chuột tự động nhả.
+        - Logic Chuột Phải:
+            Đè Chuột Phải = (Người chơi đè phím X)
+        """
+        while not self.exit_event.is_set():
+            if not (self.game_connected and self.is_running):
+                if self.is_left_down:
+                    pydirectinput.mouseUp(button='left')
+                    self.is_left_down = False
+                if self.is_right_down:
+                    pydirectinput.mouseUp(button='right')
+                    self.is_right_down = False
+                time.sleep(0.05)
+                continue
+
+            # 1. KIỂM TRA PHÍM THỦ CÔNG
+            z_down = keyboard.is_pressed('z')
+            x_down = keyboard.is_pressed('x')
+
+            # 2. ĐIỀU PHỐI CHUỘT TRÁI (UNIFIED LOGIC: AUTO TARGET OR PHÍM Z)
+            should_left_down = self.target_detected or z_down
+
+            if should_left_down and not self.is_left_down:
+                pydirectinput.mouseDown(button='left')
+                self.is_left_down = True
+            elif not should_left_down and self.is_left_down:
+                pydirectinput.mouseUp(button='left')
+                self.is_left_down = False
+
+            # 3. ĐIỀU PHỐI CHUỘT PHẢI (PHÍM X)
+            if x_down and not self.is_right_down:
+                pydirectinput.mouseDown(button='right')
+                self.is_right_down = True
+            elif not x_down and self.is_right_down:
+                pydirectinput.mouseUp(button='right')
+                self.is_right_down = False
+
+            time.sleep(0.01)  # Quét nhanh 10ms để phản hồi tức thì
+
+        # Cleanup khi luồng thoát
+        if self.is_left_down:
             pydirectinput.mouseUp(button='left')
-            self.is_pressing = False
+            self.is_left_down = False
+        if self.is_right_down:
+            pydirectinput.mouseUp(button='right')
+            self.is_right_down = False
 
     def run(self):
+        # --- OLD CODE (REPLACED) ---
+        # threads = [
+        #     threading.Thread(target=self.sensor_worker, daemon=True),
+        #     threading.Thread(target=self.action_worker, daemon=True),
+        #     threading.Thread(target=self.color_worker,   daemon=True),
+        # ]
+        # ---------------------------
         threads = [
             threading.Thread(target=self.sensor_worker, daemon=True),
             threading.Thread(target=self.action_worker, daemon=True),
             threading.Thread(target=self.color_worker,   daemon=True),
+            threading.Thread(target=self.mouse_arbiter_worker, daemon=True),
         ]
         for t in threads: t.start()
 
@@ -440,8 +534,14 @@ class SacredBot:
                     # [NEW 2026-08-16] Auto-sync Color targeting theo N (Z/X vẫn override thủ công được)
                     self.is_color_active = True
                 else:
-                    # Khi N tắt → tự tắt color targeting; color_worker guard tự nhả chuột
+                    # Khi N tắt → tự tắt color targeting; mouse_arbiter_worker guard tự nhả chuột
                     self.is_color_active = False
+                    if self.is_left_down:
+                        pydirectinput.mouseUp(button='left')
+                        self.is_left_down = False
+                    if self.is_right_down:
+                        pydirectinput.mouseUp(button='right')
+                        self.is_right_down = False
                 
                 status_msg = 'Bot đã bật.' if self.is_running else 'Bot nghỉ ngơi.'
                 self.voice.speak(status_msg)
