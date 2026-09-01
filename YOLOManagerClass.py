@@ -41,14 +41,35 @@ class YOLOManager:
         self.lost_frames = 0
         self.lock_start_time = time.time()
 
+    # --- OLD CODE (REPLACED) ---
+    # def ignore_current_target(self, duration=3.0):
+    #     """Đưa mục tiêu hiện tại vào danh sách đen trong `duration` giây và hủy Lock"""
+    #     if self.locked_target:
+    #         self.ignored_targets.append({
+    #             'pos': self.locked_target,
+    #             'expire': time.time() + duration
+    #         })
+    #     self.reset_lock()
+    # ---------------------------
+
+    def ignore_target_at(self, pos, duration=2.5):
+        """[NEW 2026-08-29] Đưa tọa độ pos (tx, ty) vào danh sách đen tạm thời để bỏ qua quái rác / xác chết."""
+        if pos:
+            self.ignored_targets.append({
+                'pos': pos,
+                'expire': time.time() + duration
+            })
+        if self.locked_target and pos:
+            lx, ly = self.locked_target
+            if ((pos[0] - lx)**2 + (pos[1] - ly)**2)**0.5 < 100:
+                self.reset_lock()
+
     def ignore_current_target(self, duration=3.0):
         """Đưa mục tiêu hiện tại vào danh sách đen trong `duration` giây và hủy Lock"""
         if self.locked_target:
-            self.ignored_targets.append({
-                'pos': self.locked_target,
-                'expire': time.time() + duration
-            })
-        self.reset_lock()
+            self.ignore_target_at(self.locked_target, duration)
+        else:
+            self.reset_lock()
 
     def get_best_target(self, debug=False):
         """Quét quái và trả về tọa độ. Nếu debug=True sẽ hiển thị cửa sổ soi."""

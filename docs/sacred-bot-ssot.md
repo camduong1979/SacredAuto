@@ -24,6 +24,7 @@
    - [SkillManager (Deprecated)](#49-skillmanager-deprecated---skillmanagerclasspy)
    - [SkillCooldownManager](#410-skillcooldownmanager---skillcooldownclasspy)
    - [SacredMeleMemory](#411-sacredmelememory---sacred_mele_memorypy)
+   - [SacredYoloBot](#412-sacredyolobot---sacred_yolopy)
 5. [Cấu hình — sacred_config.json](#5-cấu-hình--sacred_configjson)
 6. [Memory Map](#6-memory-map)
 7. [Luồng dữ liệu & Threading](#7-luồng-dữ-liệu--threading)
@@ -89,20 +90,25 @@
 
 ```
 SacredAuto/
-├── Sacred_Bot.py           ← Entry point chính (v2 - production)
+├── BotEngine.py            ← [NEW 2026-09-01] Backend Core Base Class (Lifecycle, Workers, Shared State)
+├── BuffScheduler.py        ← [NEW 2026-09-01] Module điều phối Auto Buff độc lập (Timer Gate & No Post-Cast Verify)
+├── PotionPump.py           ← [NEW 2026-09-01] Module tự động bơm máu độc lập
+├── CombatStateManager.py   ← [NEW 2026-09-01] Module quản lý Threat, Combat State & Safe Clear Timer
+├── sacred_mele_memory.py   ← Entry point Melee Bot (Kế thừa BotEngine, Memory Hover Targeting)
 ├── sacred_config.json      ← SSOT cấu hình toàn bộ hệ thống
 ├── requirements.txt        ← Danh sách thư viện
 ├── Run_Sacred_Bot.bat      ← Shortcut chạy bot (Admin)
 │
-├── AutoPotionClass.py      ← Module đọc HP, EXP & uống máu tự động
+├── AutoPotionClass.py      ← Module đọc HP, EXP từ RAM
 ├── DangerSystemClass.py    ← Module đọc Threat, Monster IDs & Mouse Hover ID
-├── HotKeySetClass.py       ← Module hotkey macro & combo skill
+├── HotKeySetClass.py       ← Module hotkey macro (Hỗ trợ Rising & Falling Edge / on_release)
 ├── CombatRadarClass.py     ← Module phát hiện quái bằng pixel scan
 ├── VoiceAssistant.py       ← Module thông báo giọng nói (Google TTS)
 ├── SacredUtils.py          ← Hàm tiện ích dùng chung (pointer resolver)
 ├── YOLOManagerClass.py     ← Module AI nhận diện quái (YOLOv8 + CUDA)
 ├── SkillCooldownClass.py   ← Module Hook ASM & đọc Memory Cooldown Skill (00562B13)
-├── sacred_mele_memory.py   ← Entry point Melee Bot (Full Memory Detection & Targeting)
+├── Sacred_Bot.py           ← Entry point chính (v2 - legacy)
+├── Sacred_yolo.py          ← Entry point YOLO AI Bot
 │
 ├── best.pt                 ← YOLO model đã train (sacred creep)
 ├── yolov8n.pt              ← YOLO pretrained base model
@@ -443,16 +449,30 @@ Giải quyết chuỗi pointer đa tầng trong RAM game.
 
 ### 4.11 `SacredMeleMemory` — `sacred_mele_memory.py`
 
-**Vai trò:** Phiên bản Bot Melee tối ưu hoàn toàn qua đọc bộ nhớ (Zero Screen Scanning), tích hợp giám sát EXP, quét ID đối tượng dưới chuột (Hover ID), khóa mục tiêu và điều phối chuột thông minh.
+**Vai trò:** Phiên bản Bot Melee tối ưu hoàn toàn qua đọc bộ nhớ (Zero Screen Scanning), kế thừa `BotEngine` theo mô hình DRY/SOLID. Tự động khóa mục tiêu qua Hover ID + Monster IDs trong RAM và tự động giữ/nhả chuột trái.
+
+#### Các Thread hoạt động
+
+| Thread | Tần suất | Nơi định nghĩa | Vai trò |
+|---|---|---|---|
+| `sensor_worker` | 50ms (20 FPS) | `BotEngine` | Đọc song song HP, Threat, Danh sách Monster IDs (`get_monster_ids`) và Hover ID (`get_mouse_hover_id`) |
+| `action_worker` | 20ms (50 FPS) | `BotEngine` | Điều phối `CombatStateManager`, `BuffScheduler` (Timer Gate, No Post-Cast Verify), `PotionPump` & HotKey |
+| `targeting_worker` | 20ms (50 FPS) | `SacredBotMemory` | Nhận diện thay đổi Hover ID, so khớp với Monster IDs, kích hoạt/hủy khóa mục tiêu và đè/nhả chuột trái |
+
+---
+
+### 4.12 `SacredYoloBot` — `Sacred_yolo.py`
+
+**Vai trò:** Phiên bản Bot AI tích hợp **"Mắt AI" (YOLOv8 + CUDA)** kết hợp kiến trúc Multi-layer Confirmation & Unified Mouse Arbiter. Sử dụng mạng nơ-ron nhận diện bbox quái vật $\rightarrow$ di chuyển chuột tối ưu $\rightarrow$ khóa và xác nhận quái chết đa tầng qua RAM (EXP, Hover ID, Threat) và CombatRadar.
 
 #### Các Thread hoạt động
 
 | Thread | Tần suất | Vai trò |
 |---|---|---|
-| `memory_sensor_worker` | 50ms (20 FPS) | Đọc song song HP, Threat, EXP, Danh sách Monster IDs (`get_monster_ids`) và Hover ID (`get_mouse_hover_id`) |
-| `combat_worker` | 20ms (50 FPS) | Điều phối Auto Buff độc lập (Fast-Retry), Auto Bơm máu, Giám sát tăng EXP (quái chết) & Safe Clear |
-| `memory_target_worker` | 20ms (50 FPS) | So khớp Hover ID với danh sách Monster IDs để bật/tắt cờ `target_detected` & `target_locked_id` |
-| `mouse_arbiter_worker` | 10ms (100 FPS) | Bộ trọng tài chuột thống nhất: Điều khiển đè/nhả Chuột Trái (Target OR Phím Z) và Chuột Phải (Phím X) |
+| `sensor_worker` | 50ms (20 FPS) | Đọc song song HP, Threat, EXP, Danh sách Monster IDs (`get_monster_ids`) và Hover ID (`get_mouse_hover_id`) |
+| `action_worker` | 20ms (50 FPS) | Điều phối Auto Buff độc lập (Fast-Retry + Hook ASM `00562B13`), Bơm máu, Giám sát tăng EXP (quái chết) & Safe Clear |
+| `yolo_worker` | 20ms (50 FPS) | Độc lập điều khiển bởi phím `Z` (Bật) / `X` (Tắt). Mở màn hình OpenCV Debug (`debug=True`) $\rightarrow$ YOLO AI quét quái $\rightarrow$ di chuột tới tọa độ tối ưu $\rightarrow$ Xác thực đa tầng (Hover ID / Radar) để khóa mục tiêu và set cờ `target_detected` |
+| `mouse_arbiter_worker` | 10ms (100 FPS) | Bộ trọng tài chuột thống nhất: Tự động đè Chuột Trái khi YOLO khóa quái (`target_detected`) và tự động nhả chuột ngay khi quái chết / mất dấu / tắt bằng phím `X` |
 
 ---
 
