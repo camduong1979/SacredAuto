@@ -74,8 +74,10 @@ class BotEngine:
         event_short = (clean_msg[:18] + "..") if len(clean_msg) > 20 else clean_msg
 
         hud_line = f"\rHP: {hp:5.1f}% | Target: {target_str:<12} | {event_short}\033[K"
-        sys.stdout.write(hud_line)
-        sys.stdout.flush()
+
+        # Không in terminal
+        # sys.stdout.write(hud_line)
+        # sys.stdout.flush()
 
     # ------------------------------------------------------------------ #
     #  ABSTRACT METHODS — Subclass bắt buộc phải override                #
@@ -129,16 +131,6 @@ class BotEngine:
                     self.last_event_msg = "Có quái"
                 elif events.get('cleared'):
                     self.last_event_msg = "Clear"
-
-            # --- OLD CODE (REPLACED: BuffScheduler chạy đồng bộ trong action_worker làm nghẽn Potion & Hotkey) ---
-            # # 2. Điều phối Buff Tự động Độc lập (Buff Scheduler)
-            # is_in_combat = self.combat_state.is_in_combat if self.combat_state else (threat > 0)
-            # if self.buff_scheduler:
-            #     self.buff_scheduler.tick(
-            #         is_in_combat=is_in_combat,
-            #         on_event=lambda msg: setattr(self, 'last_event_msg', msg)
-            #     )
-            # ------------------------------------------------------------------------------------------------------
 
             # 2. Tự động Bơm máu (Potion Pump - Phản hồi khẩn cấp tức thì)
             if self.potion_pump:
@@ -230,13 +222,6 @@ class BotEngine:
                 if keyboard.is_pressed(toggle_key):
                     self.is_running = not self.is_running
                     winsound.Beep(1000 if self.is_running else 500, 200)
-
-                    # --- OLD CODE (REPLACED: chỉ reset timers cũ, không nạp lại config) ---
-                    # if self.is_running:
-                    #     if self.buff_scheduler:
-                    #         self.buff_scheduler.reset_all_timers()
-                    #     self.last_event_msg = "Bot đã bật"
-                    # -----------------------------------------------------------------------
 
                     if self.is_running:
                         # [NEW 2026-09-01] Tự động nạp nóng toàn bộ config mới nhất từ file JSON khi bật bot

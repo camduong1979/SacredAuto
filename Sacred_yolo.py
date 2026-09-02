@@ -172,8 +172,9 @@ class SacredBot:
             f"Hover: {hover_id:<6} | EXP: {exp:<8} | YOLO: {yolo_str:<3} | Target: {target_str:<10} | {event_short}\033[K"
         )
 
-        sys.stdout.write(hud_line)
-        sys.stdout.flush()
+        # Modified: 02/09/2026 10:05 - Không in ra terminal
+        #sys.stdout.write(hud_line)
+        #sys.stdout.flush()
 
     def load_config(self):
         import json

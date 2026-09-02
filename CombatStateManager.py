@@ -57,7 +57,7 @@ class CombatStateManager:
                     self.is_in_combat    = False
                     self.safe_start_time = 0.0
                     self.release_target()
-                    pydirectinput.mouseUp(button='left')   # Nhả chuột trái nếu đang giữ
+                    #pydirectinput.mouseUp(button='left')   # Nhả chuột trái nếu đang giữ
                     events['cleared'] = True
                     self.voice.speak('Clear.')
 
