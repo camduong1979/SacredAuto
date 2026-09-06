@@ -225,7 +225,7 @@ class BotEngine:
 
                     if self.is_running:
                         # [NEW 2026-09-01] Tự động nạp nóng toàn bộ config mới nhất từ file JSON khi bật bot
-                        self.reload_all_configs()
+                        #self.reload_all_configs()
                         self.last_event_msg = "Bot đã bật"
                     else:
                         # Nhả target và phím khi tắt bot

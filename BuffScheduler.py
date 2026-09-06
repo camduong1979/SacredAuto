@@ -43,7 +43,6 @@ class BuffScheduler:
                 'name': b.get('name', 'Buff'),
                 'enabled': b.get('enabled', False),
                 'only_in_combat': b.get('only_in_combat', True),  # Mặc định chỉ buff khi có quái
-                'mode': mode,  # 'visual' hoặc 'memory'
                 'interval': b.get('interval', 30),
                 'max_retries': b.get('max_retries', 3),
                 'use_memory': b.get('use_memory', (mode == 'memory')),
@@ -54,6 +53,8 @@ class BuffScheduler:
                 'min_brightness': b.get('min_brightness', 14),
                 'max_brightness': b.get('max_brightness', 177),
                 'sequence': b.get('sequence', []),
+                'cast_delay': b.get('cast_delay', 0.2),
+                'post_cast_timeout': b.get('post_cast_timeout', 0.5),
                 'last_cast_time': 0.0,
                 'retry_count': 0,
                 'state': 'IDLE',            # 'IDLE' hoặc 'PENDING_RETRY'
@@ -86,191 +87,189 @@ class BuffScheduler:
     def is_buff_ready(self, buff) -> bool:
         """
         Kiểm tra trạng thái sẵn sàng của skill:
-        1. Mode 'memory': Đọc Cooldown Memory Hook (00562B13).
-           - Cooldown <= 0.001 -> Sẵn sàng (True)
-           - Cooldown > 0.001 -> Đang hồi chiêu (False)
-        2. Mode 'visual': Soi màu RGB pixel icon (Visual Sentinel).
-           - Thoát khỏi phổ xám đen -> Sẵn sàng (True)
-           - Rơi vào phổ xám đen -> Đang hồi chiêu / casting (False)
+        1. Nếu 'sentinel_enabled' = True -> Soi màu RGB pixel icon (Visual Sentinel).
+        2. Mặc định (hoặc không bật Sentinel) -> Đọc Cooldown Memory Hook.
         """
-        mode = buff.get('mode', 'memory' if buff.get('use_memory', False) else 'visual')
+        # 1. KIỂM TRA BẰNG VISUAL SENTINEL (Chỉ chạy khi chủ động bật True)
+        if buff.get('sentinel_enabled', False):
+            x = buff.get('sentinel_x', 0)
+            y = buff.get('sentinel_y', 0)
+            if x > 0 and y > 0:
+                try:
+                    if self.sct is None:
+                        self.sct = mss.mss()
 
-        # 1. KIỂM TRA BẰNG MEMORY COOLDOWN HOOK
-        if mode == 'memory' or buff.get('use_memory', False):
-            if self.cooldown_hook and getattr(self.cooldown_hook, 'is_hooked', False):
-                cd_val = self.cooldown_hook.get_cooldown()
-                if cd_val is not None:
-                    return cd_val <= 0.001
-            # Fallback nếu hook chưa sẵn sàng
-            if not buff.get('sentinel_enabled', False):
-                return True
+                    bbox = {'top': y, 'left': x, 'width': 1, 'height': 1}
+                    img = np.array(self.sct.grab(bbox))
+                    pixel = img[0, 0]
+                    b_val, g_val, r_val = int(pixel[0]), int(pixel[1]), int(pixel[2])
 
-        # 2. KIỂM TRA BẰNG VISUAL SENTINEL
-        if not buff.get('sentinel_enabled', True):
+                    tol = buff.get('tolerance_rgb', 1)
+                    min_b = buff.get('min_brightness', 14)
+                    max_b = buff.get('max_brightness', 177)
+
+                    is_equal_rgb = (abs(r_val - g_val) <= tol) and (abs(g_val - b_val) <= tol) and (abs(r_val - b_val) <= tol)
+                    avg_brightness = (r_val + g_val + b_val) / 3.0
+                    is_dark_range = min_b <= avg_brightness <= max_b
+                    is_casting = is_equal_rgb and is_dark_range
+
+                    # print(f"[DEBUG][CHECK] Visual RGB:({r_val},{g_val},{b_val}) Avg:{avg_brightness:.1f} IsCasting:{is_casting} -> Ready: {not is_casting}")
+                    return not is_casting
+                except Exception:
+                    self.sct = None
+                    return True
+        return True
+
+    def _is_buff_due(self, buff: dict, is_in_combat: bool, now: float, on_event=None) -> bool:
+        """
+        [SOLID - SRP] Đánh giá các điều kiện gác cổng (Gatekeeper) xem buff đã đến hạn thi triển hay chưa.
+        Trả về True nếu thỏa mãn toàn bộ Gate và sẵn sàng chạy pipeline.
+        """
+        buff_name = buff.get('name', 'Buff')
+
+        # GATE 1: Combat Gatekeeper
+        if buff.get('only_in_combat', True) and not is_in_combat:
+            if buff['state'] == 'PENDING_RETRY':
+                # print(f"[DEBUG][GATE 1] '{buff_name}' out of combat -> Reset state to IDLE")
+                buff['state'] = 'IDLE'
+                buff['pending_since'] = 0.0
+                buff['next_eval_time'] = 0.0
+            return False
+
+        # GATE 2: Interval Timer & Deferral State Gatekeeper
+        if buff['state'] == 'PENDING_RETRY':
+            # Đang chờ re-check do bận animation/cooldown
+            if now < buff['next_eval_time']:
+                return False
+
+            # Nếu chờ quá thời gian tối đa -> Xác nhận Missed thực sự
+            if (now - buff['pending_since']) > self.max_wait_timeout:
+                # print(f"[DEBUG][GATE 2] '{buff_name}' max wait timeout reached -> Missed")
+                buff['state'] = 'IDLE'
+                buff['pending_since'] = 0.0
+                buff['next_eval_time'] = 0.0
+                buff['last_cast_time'] = now
+                buff['retry_count'] = 0
+                if on_event:
+                    on_event(f"Buff {buff_name}: Missed")
+                return False
+        else:
+            # Trạng thái bình thường: kiểm tra chu kỳ interval
+            if (now - buff['last_cast_time']) < buff.get('interval', 30):
+                return False
+
+        sequence = buff.get('sequence', [])
+        if not sequence:
+            # print(f"[DEBUG] Buff '{buff_name}' missing sequence")
+            return False
+
+        return True
+
+    def _execute_buff_pipeline(self, buff: dict, now: float, on_event=None) -> bool:
+        """
+        [SOLID - SRP] Thực thi chuỗi thi triển chuẩn 3 bước tinh gọn:
+        Select & Pre-Check -> Clean State & Cast -> Restore & Hoàn tất.
+        Trả về True nếu thi triển thành công (kích hoạt GCD Stagger break).
+        Trả về False nếu kỹ năng chưa sẵn sàng và chuyển sang PENDING_RETRY.
+        """
+        buff_name = buff.get('name', 'Buff')
+        sequence = buff.get('sequence', [])
+
+        # print(f"[DEBUG] Executing buff '{buff_name}' (state: {buff['state']})")
+
+        # PRE-BUFF CLEAN STATE: Đánh dấu is_buffing
+        if self.combat_state:
+            # print("[DEBUG] Setting is_buffing = True")
+            self.combat_state.is_buffing = True
+
+        # Nếu sequence là dạng chuẩn 3 bước: [select_step, cast_step, restore_steps...]
+        if len(sequence) >= 3:
+            select_step = sequence[0]
+            cast_step = sequence[1]
+            restore_steps = sequence[2:]
+
+            # BƯỚC 1: Chọn phím skill buff và kiểm tra sẵn sàng (Select & Pre-Check)
+            # print(f"[DEBUG] Step 1 Select: {select_step}")
+            self.hotkey_sys.execute_step(select_step)
+            time.sleep(0.1)  # Nghỉ ngắn để game cập nhật state
+
+            # Kiểm tra sẵn sàng bằng Visual Sentinel
+            is_ready = self.is_buff_ready(buff)
+            # print(f"[DEBUG] Step 1 Pre-Cast Ready Check for '{buff_name}': {is_ready}")
+            if not is_ready:
+                # print(f"[DEBUG] Buff '{buff_name}' not ready -> Restoring steps and deferring")
+                for step in restore_steps:
+                    # print(f"[DEBUG] Executing restore step: {step}")
+                    self.hotkey_sys.execute_step(step)
+
+                if self.combat_state:
+                    # print("[DEBUG] Setting is_buffing = False")
+                    self.combat_state.is_buffing = False
+
+                if buff['state'] != 'PENDING_RETRY':
+                    # print(f"[DEBUG] Changing '{buff_name}' state to PENDING_RETRY")
+                    buff['state'] = 'PENDING_RETRY'
+                    buff['pending_since'] = now
+
+                buff['next_eval_time'] = now + self.defer_delay
+                buff['retry_count'] += 1
+                # print(f"[DEBUG] '{buff_name}' deferred. Next eval in {self.defer_delay}s (Retry count: {buff['retry_count']})")
+                return False
+
+            # BƯỚC 2: Giải phóng phím chuột và thi triển skill (Clean State & Cast)
+            # print("[DEBUG] Step 2: Releasing all inputs")
+            self.hotkey_sys.release_all_inputs()
+            time.sleep(0.02)
+            # print(f"[DEBUG] Step 2 Cast: {cast_step}")
+            self.hotkey_sys.execute_step(cast_step)
+
+            # BƯỚC 3: Khôi phục về phím chính (Restore & Hoàn tất)
+            for step in restore_steps:
+                # print(f"[DEBUG] Step 3 Restore step: {step}")
+                self.hotkey_sys.execute_step(step)
+
+            # Cập nhật hoàn tất & Kích hoạt GCD Stagger
+            # print(f"[DEBUG] Buff '{buff_name}' completed successfully")
+            buff['last_cast_time'] = now
+            buff['state'] = 'IDLE'
+            buff['pending_since'] = 0.0
+            buff['next_eval_time'] = 0.0
+            buff['retry_count'] = 0
+            self.last_successful_cast_time = now
+
+            # Kết thúc lượt Buff thành công
+            if self.combat_state:
+                # print("[DEBUG] Setting is_buffing = False")
+                self.combat_state.is_buffing = False
+
+            if on_event:
+                on_event(f"Buff {buff_name}: OK")
+
+            # print(f"[DEBUG] Breaking loop to enforce GCD stagger")
             return True
 
-        x = buff.get('sentinel_x', 0)
-        y = buff.get('sentinel_y', 0)
-        if x <= 0 or y <= 0:
+        else:
+            # Fallback cho sequence tự do
+            # print(f"[DEBUG] Fallback: Executing full sequence for '{buff_name}'")
+            self.hotkey_sys.execute_sequence(sequence)
+            buff['last_cast_time'] = now
+            buff['state'] = 'IDLE'
+            buff['pending_since'] = 0.0
+            buff['next_eval_time'] = 0.0
+            buff['retry_count'] = 0
+            self.last_successful_cast_time = now
+
+            if self.combat_state:
+                # print("[DEBUG] Setting is_buffing = False")
+                self.combat_state.is_buffing = False
+
+            if on_event:
+                on_event(f"Buff {buff_name}: OK")
             return True
 
-        try:
-            if self.sct is None:
-                self.sct = mss.mss()
-
-            bbox = {'top': y, 'left': x, 'width': 1, 'height': 1}
-            img = np.array(self.sct.grab(bbox))
-            pixel = img[0, 0]
-            b_val, g_val, r_val = int(pixel[0]), int(pixel[1]), int(pixel[2])
-
-            tol = buff.get('tolerance_rgb', 1)
-            min_b = buff.get('min_brightness', 14)
-            max_b = buff.get('max_brightness', 177)
-
-            is_equal_rgb = (abs(r_val - g_val) <= tol) and (abs(g_val - b_val) <= tol) and (abs(r_val - b_val) <= tol)
-            avg_brightness = (r_val + g_val + b_val) / 3.0
-            is_dark_range = min_b <= avg_brightness <= max_b
-            is_casting = is_equal_rgb and is_dark_range
-
-            return not is_casting
-        except Exception:
-            self.sct = None
-            return True
-
-    # def tick(self, is_in_combat: bool, on_event=None):
-    #     """
-    #     [NEW 2026-09-01] Vòng lặp điều phối Buff tự động với GCD Stagger & Deferral Logic.
-    #     Được gọi độc lập từ buff_worker (50ms).
-    #     on_event(str): callback nhận thông điệp HUD khi thi triển buff.
-    #     """
-    #     if not self.enabled:
-    #         return
-
-    #     now = time.time()
-
-    #     # GATE 0: Global Cooldown (GCD) Stagger Gatekeeper
-    #     # Tránh thi triển 2 buff quá sát nhau làm xung đột animation và cooldown game
-    #     if (now - self.last_successful_cast_time) < self.stagger_delay:
-    #         return
-
-    #     for buff in self.buffs:
-    #         if not buff.get('enabled', False):
-    #             continue
-
-    #         buff_name = buff.get('name', 'Buff')
-
-    #         # GATE 1: Combat Gatekeeper
-    #         if buff.get('only_in_combat', True) and not is_in_combat:
-    #             if buff['state'] == 'PENDING_RETRY':
-    #                 buff['state'] = 'IDLE'
-    #                 buff['pending_since'] = 0.0
-    #                 buff['next_eval_time'] = 0.0
-    #             continue
-
-    #         # GATE 2: Interval Timer & Deferral State Gatekeeper
-    #         if buff['state'] == 'PENDING_RETRY':
-    #             # Đang chờ re-check do bận animation/cooldown
-    #             if now < buff['next_eval_time']:
-    #                 continue
-
-    #             # Nếu chờ quá thời gian tối đa -> Xác nhận Missed thực sự
-    #             if (now - buff['pending_since']) > self.max_wait_timeout:
-    #                 buff['state'] = 'IDLE'
-    #                 buff['pending_since'] = 0.0
-    #                 buff['next_eval_time'] = 0.0
-    #                 buff['last_cast_time'] = now
-    #                 buff['retry_count'] = 0
-    #                 if on_event:
-    #                     on_event(f"Buff {buff_name}: Missed")
-    #                 continue
-    #         else:
-    #             # Trạng thái bình thường: kiểm tra chu kỳ interval
-    #             if (now - buff['last_cast_time']) < buff.get('interval', 30):
-    #                 continue
-
-    #         sequence = buff.get('sequence', [])
-    #         if not sequence:
-    #             continue
-
-    #         # [NEW 2026-09-01] PRE-BUFF CLEAN STATE: Đánh dấu is_buffing và xả toàn bộ phím/chuột
-    #         if self.combat_state:
-    #             self.combat_state.is_buffing = True
-    #         self.hotkey_sys.release_all_inputs()
-    #         time.sleep(0.02)
-
-    #         # Nếu sequence là dạng chuẩn 3 bước: [select_step, cast_step, restore_steps...]
-    #         if len(sequence) >= 3:
-    #             select_step = sequence[0]
-    #             cast_step = sequence[1]
-    #             restore_steps = sequence[2:]
-
-    #             # BƯỚC 1: Chọn phím skill buff (Select)
-    #             self.hotkey_sys.execute_step(select_step)
-    #             time.sleep(0.04)  # Nghỉ ngắn để game cập nhật state
-
-    #             # BƯỚC 2: Kiểm tra sẵn sàng (Pre-Cast Ready Check)
-    #             if not self.is_buff_ready(buff):
-    #                 # Skill chưa sẵn sàng -> Trả về phím chính ngay, không click chuột
-    #                 for step in restore_steps:
-    #                     self.hotkey_sys.execute_step(step)
-
-    #                 # Kết thúc lượt can thiệp Buff để trả quyền điều khiển lại cho targeting_worker
-    #                 if self.combat_state:
-    #                     self.combat_state.is_buffing = False
-
-    #                 # Chuyển sang trạng thái PENDING_RETRY với defer_delay
-    #                 if buff['state'] != 'PENDING_RETRY':
-    #                     buff['state'] = 'PENDING_RETRY'
-    #                     buff['pending_since'] = now
-
-    #                 buff['next_eval_time'] = now + self.defer_delay
-    #                 buff['retry_count'] += 1
-    #                 continue
-
-    #             # BƯỚC 3: Thi triển skill (Cast)
-    #             self.hotkey_sys.execute_step(cast_step)
-
-    #             # BƯỚC 4: Khôi phục về phím chính (Restore)
-    #             for step in restore_steps:
-    #                 self.hotkey_sys.execute_step(step)
-
-    #             # BƯỚC 5: Cập nhật hoàn tất & Kích hoạt GCD Stagger
-    #             buff['last_cast_time'] = now
-    #             buff['state'] = 'IDLE'
-    #             buff['pending_since'] = 0.0
-    #             buff['next_eval_time'] = 0.0
-    #             buff['retry_count'] = 0
-    #             self.last_successful_cast_time = now
-
-    #             # Kết thúc lượt Buff thành công
-    #             if self.combat_state:
-    #                 self.combat_state.is_buffing = False
-
-    #             if on_event:
-    #                 on_event(f"Buff {buff_name}: OK")
-
-    #             # Thoát vòng lặp ngay sau khi thi triển 1 buff để kích hoạt GCD Stagger
-    #             break
-
-    #         else:
-    #             # Fallback cho sequence tự do
-    #             self.hotkey_sys.execute_sequence(sequence)
-    #             buff['last_cast_time'] = now
-    #             buff['state'] = 'IDLE'
-    #             buff['pending_since'] = 0.0
-    #             buff['next_eval_time'] = 0.0
-    #             buff['retry_count'] = 0
-    #             self.last_successful_cast_time = now
-
-    #             if self.combat_state:
-    #                 self.combat_state.is_buffing = False
-
-    #             if on_event:
-    #                 on_event(f"Buff {buff_name}: OK")
-    #             break
     def tick(self, is_in_combat: bool, on_event=None):
         """
-        [NEW 2026-09-01] Vòng lặp điều phối Buff tự động với GCD Stagger & Deferral Logic.
+        [SOLID - SRP Clean Coordinator] Vòng lặp điều phối Buff tự động cấp cao.
         Được gọi độc lập từ buff_worker (50ms).
         on_event(str): callback nhận thông điệp HUD khi thi triển buff.
         """
@@ -280,7 +279,6 @@ class BuffScheduler:
         now = time.time()
 
         # GATE 0: Global Cooldown (GCD) Stagger Gatekeeper
-        # Tránh thi triển 2 buff quá sát nhau làm xung đột animation và cooldown game
         if (now - self.last_successful_cast_time) < self.stagger_delay:
             return
 
@@ -288,136 +286,8 @@ class BuffScheduler:
             if not buff.get('enabled', False):
                 continue
 
-            buff_name = buff.get('name', 'Buff')
-
-            # GATE 1: Combat Gatekeeper
-            if buff.get('only_in_combat', True) and not is_in_combat:
-                if buff['state'] == 'PENDING_RETRY':
-                    print(f"[DEBUG][GATE 1] '{buff_name}' out of combat -> Reset state to IDLE")
-                    buff['state'] = 'IDLE'
-                    buff['pending_since'] = 0.0
-                    buff['next_eval_time'] = 0.0
-                continue
-
-            # GATE 2: Interval Timer & Deferral State Gatekeeper
-            if buff['state'] == 'PENDING_RETRY':
-                # Đang chờ re-check do bận animation/cooldown
-                if now < buff['next_eval_time']:
-                    continue
-
-                # Nếu chờ quá thời gian tối đa -> Xác nhận Missed thực sự
-                if (now - buff['pending_since']) > self.max_wait_timeout:
-                    print(f"[DEBUG][GATE 2] '{buff_name}' max wait timeout reached -> Missed")
-                    buff['state'] = 'IDLE'
-                    buff['pending_since'] = 0.0
-                    buff['next_eval_time'] = 0.0
-                    buff['last_cast_time'] = now
-                    buff['retry_count'] = 0
-                    if on_event:
-                        on_event(f"Buff {buff_name}: Missed")
-                    continue
-            else:
-                # Trạng thái bình thường: kiểm tra chu kỳ interval
-                if (now - buff['last_cast_time']) < buff.get('interval', 30):
-                    continue
-
-            sequence = buff.get('sequence', [])
-            if not sequence:
-                print(f"[DEBUG] Buff '{buff_name}' missing sequence")
-                continue
-
-            print(f"[DEBUG] Executing buff '{buff_name}' (state: {buff['state']})")
-
-            # [NEW 2026-09-01] PRE-BUFF CLEAN STATE: Đánh dấu is_buffing và xả toàn bộ phím/chuột
-            if self.combat_state:
-                print("[DEBUG] Setting is_buffing = True")
-                self.combat_state.is_buffing = True
-            print("[DEBUG] Releasing all inputs")
-            self.hotkey_sys.release_all_inputs()
-            time.sleep(0.02)
-
-            # Nếu sequence là dạng chuẩn 3 bước: [select_step, cast_step, restore_steps...]
-            if len(sequence) >= 3:
-                select_step = sequence[0]
-                cast_step = sequence[1]
-                restore_steps = sequence[2:]
-
-                # BƯỚC 1: Chọn phím skill buff (Select)
-                print(f"[DEBUG] Step 1 Select: {select_step}")
-                self.hotkey_sys.execute_step(select_step)
-                time.sleep(0.04)  # Nghỉ ngắn để game cập nhật state
-
-                # BƯỚC 2: Kiểm tra sẵn sàng (Pre-Cast Ready Check)
-                is_ready = self.is_buff_ready(buff)
-                print(f"[DEBUG] Step 2 Pre-Cast Ready Check for '{buff_name}': {is_ready}")
-                if not is_ready:
-                    print(f"[DEBUG] Buff '{buff_name}' not ready -> Restoring steps and deferring")
-                    # Skill chưa sẵn sàng -> Trả về phím chính ngay, không click chuột
-                    for step in restore_steps:
-                        print(f"[DEBUG] Executing restore step: {step}")
-                        self.hotkey_sys.execute_step(step)
-
-                    # Kết thúc lượt can thiệp Buff để trả quyền điều khiển lại cho targeting_worker
-                    if self.combat_state:
-                        print("[DEBUG] Setting is_buffing = False")
-                        self.combat_state.is_buffing = False
-
-                    # Chuyển sang trạng thái PENDING_RETRY với defer_delay
-                    if buff['state'] != 'PENDING_RETRY':
-                        print(f"[DEBUG] Changing '{buff_name}' state to PENDING_RETRY")
-                        buff['state'] = 'PENDING_RETRY'
-                        buff['pending_since'] = now
-
-                    buff['next_eval_time'] = now + self.defer_delay
-                    buff['retry_count'] += 1
-                    print(f"[DEBUG] '{buff_name}' deferred. Next eval in {self.defer_delay}s (Retry count: {buff['retry_count']})")
-                    continue
-
-                # BƯỚC 3: Thi triển skill (Cast)
-                print(f"[DEBUG] Step 3 Cast: {cast_step}")
-                self.hotkey_sys.execute_step(cast_step)
-
-                # BƯỚC 4: Khôi phục về phím chính (Restore)
-                for step in restore_steps:
-                    print(f"[DEBUG] Step 4 Restore step: {step}")
-                    self.hotkey_sys.execute_step(step)
-
-                # BƯỚC 5: Cập nhật hoàn tất & Kích hoạt GCD Stagger
-                print(f"[DEBUG] Step 5 Buff '{buff_name}' completed successfully")
-                buff['last_cast_time'] = now
-                buff['state'] = 'IDLE'
-                buff['pending_since'] = 0.0
-                buff['next_eval_time'] = 0.0
-                buff['retry_count'] = 0
-                self.last_successful_cast_time = now
-
-                # Kết thúc lượt Buff thành công
-                if self.combat_state:
-                    print("[DEBUG] Setting is_buffing = False")
-                    self.combat_state.is_buffing = False
-
-                if on_event:
-                    on_event(f"Buff {buff_name}: OK")
-
-                # Thoát vòng lặp ngay sau khi thi triển 1 buff để kích hoạt GCD Stagger
-                print(f"[DEBUG] Breaking loop to enforce GCD stagger")
-                break
-
-            else:
-                # Fallback cho sequence tự do
-                print(f"[DEBUG] Fallback: Executing full sequence for '{buff_name}'")
-                self.hotkey_sys.execute_sequence(sequence)
-                buff['last_cast_time'] = now
-                buff['state'] = 'IDLE'
-                buff['pending_since'] = 0.0
-                buff['next_eval_time'] = 0.0
-                buff['retry_count'] = 0
-                self.last_successful_cast_time = now
-
-                if self.combat_state:
-                    print("[DEBUG] Setting is_buffing = False")
-                    self.combat_state.is_buffing = False
-
-                if on_event:
-                    on_event(f"Buff {buff_name}: OK")
-                break
+            # Kiểm tra xem buff đã đến hạn thi triển chưa (Gatekeeper)
+            if self._is_buff_due(buff, is_in_combat, now, on_event):
+                # Thực thi pipeline 3 bước, nếu thành công thì break để kích hoạt GCD Stagger
+                if self._execute_buff_pipeline(buff, now, on_event):
+                    break
