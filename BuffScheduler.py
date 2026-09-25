@@ -221,6 +221,7 @@ class BuffScheduler:
             self.hotkey_sys.release_all_inputs()
             time.sleep(0.02)
             # print(f"[DEBUG] Step 2 Cast: {cast_step}")
+            self.voice.speak('Buff skill.')
             self.hotkey_sys.execute_step(cast_step)
 
             # BƯỚC 3: Khôi phục về phím chính (Restore & Hoàn tất)

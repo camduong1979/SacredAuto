@@ -158,5 +158,6 @@ cython_debug/
 google_voice_cache/
 *.log
 sacred_config.json
+old_config.json
 /sacred_reborn
 
